@@ -3,6 +3,17 @@
  * Lazy-loaded to reduce initial bundle size
  */
 
+import { handleError } from './errorHandler';
+import { validateFilename } from './security';
+import {
+    PDF_PAGE_WIDTH_MM,
+    PDF_PAGE_HEIGHT_MM,
+    PDF_MARGIN_MM,
+    PDF_LINE_HEIGHT_MM,
+    PDF_CANVAS_SCALE,
+    PDF_CODE_MAX_CHARS
+} from './constants';
+
 // Helper to strip markdown formatting from text
 const stripMarkdown = (text: string): string => {
     return text
@@ -40,12 +51,12 @@ export async function exportToPdfText(markdown: string, filename: string): Promi
             compress: true
         });
 
-        const pageWidth = 210;
-        const pageHeight = 297;
-        const marginX = 15;
-        const marginY = 15;
+        const pageWidth = PDF_PAGE_WIDTH_MM;
+        const pageHeight = PDF_PAGE_HEIGHT_MM;
+        const marginX = PDF_MARGIN_MM;
+        const marginY = PDF_MARGIN_MM;
         const contentWidth = pageWidth - (marginX * 2);
-        const lineHeight = 5;
+        const lineHeight = PDF_LINE_HEIGHT_MM;
         let currentY = marginY;
 
         // Helper to add a new page if needed
@@ -218,9 +229,9 @@ export async function exportToPdfText(markdown: string, filename: string): Promi
                 if (inCodeBlock) {
                     // End code block - render it with proper wrapping
                     if (codeBlockContent.length > 0) {
-                        // Calculate wrapped lines first (95 chars fits well at 8pt courier)
+                        // Calculate wrapped lines first
                         const wrappedCodeLines: string[] = [];
-                        const maxCodeChars = 95;
+                        const maxCodeChars = PDF_CODE_MAX_CHARS;
 
                         for (const codeLine of codeBlockContent) {
                             const wrapped = wrapCodeText(codeLine, maxCodeChars);
@@ -457,8 +468,8 @@ export async function exportToPdfText(markdown: string, filename: string): Promi
         }
 
         pdf.save(`${filename}.pdf`);
-    } catch {
-        // Silently handle errors
+    } catch (error) {
+        handleError(error, { component: 'exportPdf', action: 'exportToPdfText' });
     }
 }
 
@@ -502,9 +513,9 @@ export async function exportToPdfImage(editorElement: HTMLElement, filename: str
         `;
         tempDiv.appendChild(style);
 
-        // Render to canvas at 1.5x scale (good quality but smaller file)
+        // Render to canvas at configured scale (good quality but smaller file)
         const canvas = await html2canvas(tempDiv, {
-            scale: 1.5,
+            scale: PDF_CANVAS_SCALE,
             useCORS: true,
             logging: false,
             backgroundColor: '#ffffff'
@@ -521,16 +532,15 @@ export async function exportToPdfImage(editorElement: HTMLElement, filename: str
             compress: true
         });
 
-        const pageWidth = 210; // A4 width in mm
-        const pageHeight = 297; // A4 height in mm
-        const marginX = 15; // 15mm margins
-        const marginY = 15;
-        const contentWidth = pageWidth - (marginX * 2); // 180mm
-        const contentHeight = pageHeight - (marginY * 2); // 267mm
+        const pageWidth = PDF_PAGE_WIDTH_MM;
+        const pageHeight = PDF_PAGE_HEIGHT_MM;
+        const marginX = PDF_MARGIN_MM;
+        const marginY = PDF_MARGIN_MM;
+        const contentWidth = pageWidth - (marginX * 2);
+        const contentHeight = pageHeight - (marginY * 2);
 
         // Calculate the scaled dimensions
-        // Canvas is at 1.5x scale
-        const scaleFactor = 1.5;
+        const scaleFactor = PDF_CANVAS_SCALE;
         const imgPixelWidth = canvas.width / scaleFactor;
         const imgPixelHeight = canvas.height / scaleFactor;
 
@@ -599,8 +609,8 @@ export async function exportToPdfImage(editorElement: HTMLElement, filename: str
 
         // Download
         pdf.save(`${filename}.pdf`);
-    } catch {
-        // Silently handle errors
+    } catch (error) {
+        handleError(error, { component: 'exportPdf', action: 'exportToPdfImage' });
     }
 }
 
@@ -616,7 +626,9 @@ export async function exportToPdf(
     const filename = window.prompt('Enter filename for PDF:', defaultFilename);
     if (filename === null) return; // User cancelled
 
-    const safeFilename = (filename.trim() || 'document').replace(/[<>:"/\\|?*]/g, '_');
+    // Validate and sanitize filename
+    const filenameResult = validateFilename(filename);
+    const safeFilename = filenameResult.sanitized || 'document';
 
     // Ask user which type of PDF they want
     const choice = window.confirm(

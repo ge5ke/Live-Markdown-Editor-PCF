@@ -13,6 +13,9 @@ import {
 } from '@milkdown/preset-commonmark';
 import { insertTableCommand, toggleStrikethroughCommand } from '@milkdown/preset-gfm';
 import { redoCommand, undoCommand } from '@milkdown/plugin-history';
+import { validateLinkUrl, validateImageUrl } from '../utils/security';
+import { handleError } from '../utils/errorHandler';
+import { TABLE_MIN_ROWS } from '../utils/constants';
 
 export interface UseEditorCommandsProps {
     getEditor: () => Editor | undefined;
@@ -41,8 +44,8 @@ export function useEditorCommands({ getEditor }: UseEditorCommandsProps): Editor
     const executeCommand = useCallback((command: Parameters<typeof callCommand>[0], payload?: unknown) => {
         try {
             getEditor()?.action(callCommand(command, payload));
-        } catch {
-            // Silently handle command errors
+        } catch (error) {
+            handleError(error, { component: 'useEditorCommands', action: 'executeCommand' });
         }
     }, [getEditor]);
 
@@ -105,6 +108,13 @@ export function useEditorCommands({ getEditor }: UseEditorCommandsProps): Editor
             const url = window.prompt('Enter URL:', 'https://');
             if (!url) return;
 
+            // Validate URL for security
+            const validation = validateLinkUrl(url);
+            if (!validation.valid) {
+                window.alert(validation.error);
+                return;
+            }
+
             const defaultText = selectedText || url;
             const linkText = window.prompt('Enter link text (or leave empty to show URL):', defaultText);
             if (linkText === null) return;
@@ -113,22 +123,30 @@ export function useEditorCommands({ getEditor }: UseEditorCommandsProps): Editor
             const linkMark = state.schema.marks.link;
 
             if (linkMark) {
-                const mark = linkMark.create({ href: url, title: '' });
+                const mark = linkMark.create({ href: validation.sanitized || url, title: '' });
                 const textNode = state.schema.text(displayText, [mark]);
                 const tr = state.tr.replaceSelectionWith(textNode, false);
                 dispatch(tr);
                 view.focus();
             }
-        } catch {
-            // Silently handle errors
+        } catch (error) {
+            handleError(error, { component: 'useEditorCommands', action: 'insertLink' });
         }
     }, [getEditor]);
 
     const insertImage = useCallback(() => {
         const url = window.prompt('Enter image URL:', 'https://');
         if (!url) return;
+
+        // Validate URL for security
+        const validation = validateImageUrl(url);
+        if (!validation.valid) {
+            window.alert(validation.error);
+            return;
+        }
+
         const alt = window.prompt('Enter alt text:', 'image') || 'image';
-        executeCommand(insertImageCommand.key, { src: url, alt });
+        executeCommand(insertImageCommand.key, { src: validation.sanitized || url, alt });
     }, [executeCommand]);
 
     const insertCode = useCallback(() => {
@@ -149,13 +167,13 @@ export function useEditorCommands({ getEditor }: UseEditorCommandsProps): Editor
                     dispatch(tr);
                 }
             }
-        } catch {
-            // Silently handle errors
+        } catch (error) {
+            handleError(error, { component: 'useEditorCommands', action: 'insertCode' });
         }
     }, [getEditor]);
 
     const insertTable = useCallback((rows: number, cols: number) => {
-        const actualRows = Math.max(2, rows);
+        const actualRows = Math.max(TABLE_MIN_ROWS, rows);
         if (actualRows > 0 && cols > 0) {
             executeCommand(insertTableCommand.key, { row: actualRows, col: cols });
         }

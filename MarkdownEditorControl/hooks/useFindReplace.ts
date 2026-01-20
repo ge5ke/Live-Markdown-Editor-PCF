@@ -3,6 +3,8 @@ import { Editor, editorViewCtx, parserCtx } from '@milkdown/core';
 import { TextSelection } from '@milkdown/prose/state';
 import { Decoration, DecorationSet } from '@milkdown/prose/view';
 import type { FindResults, FindData } from '../types/editor.types';
+import { handleError } from '../utils/errorHandler';
+import { DEBOUNCE_SEARCH_MS } from '../utils/constants';
 
 const ESCAPE_REGEX = /[.*+?^${}()|[\]\\]/g;
 
@@ -70,8 +72,8 @@ export function useFindReplace({
                 : DecorationSet.empty;
 
             view.setProps({ decorations: () => decorationSet });
-        } catch {
-            // Silently handle errors
+        } catch (error) {
+            handleError(error, { component: 'useFindReplace', action: 'applySearchHighlights' });
         }
     }, [getEditor]);
 
@@ -85,8 +87,8 @@ export function useFindReplace({
             if (!view) return;
 
             view.setProps({ decorations: () => DecorationSet.empty });
-        } catch {
-            // Silently handle errors
+        } catch (error) {
+            handleError(error, { component: 'useFindReplace', action: 'clearSearchHighlights' });
         }
     }, [getEditor]);
 
@@ -127,11 +129,11 @@ export function useFindReplace({
                         }
                     }
                 }
-            } catch {
-                // Silently handle scroll errors
+            } catch (scrollError) {
+                handleError(scrollError, { component: 'useFindReplace', action: 'scrollToMatch' }, 'warning');
             }
-        } catch {
-            // Silently handle errors
+        } catch (error) {
+            handleError(error, { component: 'useFindReplace', action: 'selectMatchAtIndex' });
         }
     }, [getEditor, applySearchHighlights, containerRef]);
 
@@ -181,7 +183,9 @@ export function useFindReplace({
             if (autoSelect && positions.length > 0) {
                 selectMatchAtIndex(0);
             }
-        } catch {
+        } catch (error) {
+            handleError(error, { component: 'useFindReplace', action: 'handleFind' }, 'warning');
+            // Fallback to simple text search
             const content = currentMarkdown.current;
             const regex = new RegExp(findText.replace(ESCAPE_REGEX, '\\$&'), 'gi');
             const matches = content.match(regex);
@@ -203,7 +207,7 @@ export function useFindReplace({
 
         searchTimeoutRef.current = setTimeout(() => {
             handleFind(false);
-        }, 100);
+        }, DEBOUNCE_SEARCH_MS);
 
         return () => {
             if (searchTimeoutRef.current) clearTimeout(searchTimeoutRef.current);
@@ -303,8 +307,8 @@ export function useFindReplace({
                 }
                 handleFind();
             }
-        } catch {
-            // Silently handle errors
+        } catch (error) {
+            handleError(error, { component: 'useFindReplace', action: 'handleReplace' });
         }
     }, [findText, replaceText, getEditor, currentMarkdown, handleFind]);
 
@@ -334,8 +338,8 @@ export function useFindReplace({
                 setResults({ count: 0, current: 0 });
                 clearSearchHighlights();
             }
-        } catch {
-            // Silently handle errors
+        } catch (error) {
+            handleError(error, { component: 'useFindReplace', action: 'handleReplaceAll' });
         }
     }, [findText, replaceText, getEditor, currentMarkdown, clearSearchHighlights]);
 

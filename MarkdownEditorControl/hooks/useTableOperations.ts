@@ -1,10 +1,15 @@
 import { useCallback } from 'react';
 import { Editor, editorViewCtx } from '@milkdown/core';
 import { Node as ProseMirrorNode } from '@milkdown/prose/model';
+import { handleError } from '../utils/errorHandler';
+import { TABLE_MIN_ROWS, TABLE_MIN_COLS } from '../utils/constants';
+
+export type NotificationType = 'info' | 'warning' | 'error';
 
 export interface UseTableOperationsProps {
     getEditor: () => Editor | undefined;
     onComplete?: () => void;
+    onNotify?: (message: string, type: NotificationType) => void;
 }
 
 export interface TableOperations {
@@ -31,7 +36,21 @@ function createEmptyCell(
     return cellType.create(null);
 }
 
-export function useTableOperations({ getEditor, onComplete }: UseTableOperationsProps): TableOperations {
+// Helper to show notification with fallback to alert
+function notify(
+    onNotify: UseTableOperationsProps['onNotify'],
+    message: string,
+    type: NotificationType = 'info'
+): void {
+    if (onNotify) {
+        onNotify(message, type);
+    } else {
+        // Fallback to alert for backwards compatibility
+        window.alert(message);
+    }
+}
+
+export function useTableOperations({ getEditor, onComplete, onNotify }: UseTableOperationsProps): TableOperations {
     const addTableRow = useCallback(() => {
         const editor = getEditor();
         if (!editor) return;
@@ -65,7 +84,7 @@ export function useTableOperations({ getEditor, onComplete }: UseTableOperations
             }
 
             if (tableDepth === -1 || !tableNode || rowIndex === -1) {
-                alert('Place your cursor inside a table to add a row.');
+                notify(onNotify, 'Place your cursor inside a table to add a row.', 'info');
                 return;
             }
 
@@ -96,10 +115,10 @@ export function useTableOperations({ getEditor, onComplete }: UseTableOperations
             const tr = state.tr.insert(insertPos, newRow);
             dispatch(tr);
             onComplete?.();
-        } catch (e) {
-            console.error('Error adding row:', e);
+        } catch (error) {
+            handleError(error, { component: 'useTableOperations', action: 'addTableRow' });
         }
-    }, [getEditor, onComplete]);
+    }, [getEditor, onComplete, onNotify]);
 
     const addTableColumn = useCallback(() => {
         const editor = getEditor();
@@ -130,7 +149,7 @@ export function useTableOperations({ getEditor, onComplete }: UseTableOperations
             }
 
             if (tableDepth === -1 || !tableNode) {
-                alert('Place your cursor inside a table to add a column.');
+                notify(onNotify, 'Place your cursor inside a table to add a column.', 'info');
                 return;
             }
 
@@ -170,10 +189,10 @@ export function useTableOperations({ getEditor, onComplete }: UseTableOperations
             const tr = state.tr.replaceWith(tableStart, tableEnd, newTable);
             dispatch(tr);
             onComplete?.();
-        } catch (e) {
-            console.error('Error adding column:', e);
+        } catch (error) {
+            handleError(error, { component: 'useTableOperations', action: 'addTableColumn' });
         }
-    }, [getEditor, onComplete]);
+    }, [getEditor, onComplete, onNotify]);
 
     const deleteTableRow = useCallback(() => {
         const editor = getEditor();
@@ -196,8 +215,8 @@ export function useTableOperations({ getEditor, onComplete }: UseTableOperations
                 }
             }
 
-            if (tableNode && tableNode.childCount <= 2) {
-                alert('Cannot delete row - tables need at least 2 rows (header + data). Delete the table instead.');
+            if (tableNode && tableNode.childCount <= TABLE_MIN_ROWS) {
+                notify(onNotify, 'Cannot delete row - tables need at least 2 rows (header + data). Delete the table instead.', 'warning');
                 onComplete?.();
                 return;
             }
@@ -213,12 +232,12 @@ export function useTableOperations({ getEditor, onComplete }: UseTableOperations
                     return;
                 }
             }
-            alert('Place your cursor inside a table row to delete it.');
-        } catch (e) {
-            console.error('Error deleting row:', e);
+            notify(onNotify, 'Place your cursor inside a table row to delete it.', 'info');
+        } catch (error) {
+            handleError(error, { component: 'useTableOperations', action: 'deleteTableRow' });
         }
         onComplete?.();
-    }, [getEditor, onComplete]);
+    }, [getEditor, onComplete, onNotify]);
 
     const deleteTableColumn = useCallback(() => {
         const editor = getEditor();
@@ -249,15 +268,15 @@ export function useTableOperations({ getEditor, onComplete }: UseTableOperations
             }
 
             if (tableDepth === -1 || !tableNode) {
-                alert('Place your cursor inside a table to delete a column.');
+                notify(onNotify, 'Place your cursor inside a table to delete a column.', 'info');
                 onComplete?.();
                 return;
             }
 
             const tableStart = $from.before(tableDepth);
             const firstRow = tableNode.firstChild;
-            if (firstRow && firstRow.childCount <= 1) {
-                alert('Cannot delete the last column. Delete the table instead.');
+            if (firstRow && firstRow.childCount <= TABLE_MIN_COLS) {
+                notify(onNotify, 'Cannot delete the last column. Delete the table instead.', 'warning');
                 onComplete?.();
                 return;
             }
@@ -285,10 +304,10 @@ export function useTableOperations({ getEditor, onComplete }: UseTableOperations
             const tr = state.tr.replaceWith(tableStart, tableEnd, newTable);
             dispatch(tr);
             onComplete?.();
-        } catch (e) {
-            console.error('Error deleting column:', e);
+        } catch (error) {
+            handleError(error, { component: 'useTableOperations', action: 'deleteTableColumn' });
         }
-    }, [getEditor, onComplete]);
+    }, [getEditor, onComplete, onNotify]);
 
     const deleteTable = useCallback(() => {
         const editor = getEditor();
@@ -313,12 +332,12 @@ export function useTableOperations({ getEditor, onComplete }: UseTableOperations
                     return;
                 }
             }
-            alert('Place your cursor inside a table to delete it.');
-        } catch (e) {
-            console.error('Error deleting table:', e);
+            notify(onNotify, 'Place your cursor inside a table to delete it.', 'info');
+        } catch (error) {
+            handleError(error, { component: 'useTableOperations', action: 'deleteTable' });
         }
         onComplete?.();
-    }, [getEditor, onComplete]);
+    }, [getEditor, onComplete, onNotify]);
 
     return {
         addTableRow,

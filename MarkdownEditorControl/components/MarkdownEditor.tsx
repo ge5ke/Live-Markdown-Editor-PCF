@@ -14,6 +14,17 @@ import '@milkdown/theme-nord/style.css';
 // Import templates from separate module
 import { MARKDOWN_TEMPLATES } from '../utils/templates';
 
+// Import security utilities
+import { validateFilename, validateImageSize, sanitizeHtml, escapeHtml } from '../utils/security';
+import { handleError } from '../utils/errorHandler';
+import {
+    DEBOUNCE_SERIALIZE_MS,
+    COPY_SUCCESS_TIMEOUT_MS,
+    TABLE_GRID_SIZE,
+    TABLE_MIN_ROWS,
+    MAX_MARKDOWN_LENGTH
+} from '../utils/constants';
+
 // Import custom hooks
 import { useEditorCommands, useTableOperations, useFindReplace } from '../hooks';
 
@@ -182,7 +193,7 @@ const EditorComponent: React.FC<Omit<MarkdownEditorProps, 'value' | 'onChange'> 
                             clearTimeout(serializeTimeoutRef.current);
                         }
 
-                        // Defer ALL work to after typing stops (150ms)
+                        // Defer ALL work to after typing stops
                         serializeTimeoutRef.current = setTimeout(() => {
                             try {
                                 // Serialize to markdown
@@ -206,10 +217,10 @@ const EditorComponent: React.FC<Omit<MarkdownEditorProps, 'value' | 'onChange'> 
                                 const charEl = document.getElementById('md-char-count');
                                 if (wordEl) wordEl.textContent = `Words: ${words}`;
                                 if (charEl) charEl.textContent = `Characters: ${charCount} / ${maxLength}`;
-                            } catch {
-                                // Silently handle errors
+                            } catch (error) {
+                                handleError(error, { component: 'MarkdownEditor', action: 'serialize' });
                             }
-                        }, 150);
+                        }, DEBOUNCE_SERIALIZE_MS);
                     });
                 })
                 .use(commonmark)
@@ -277,8 +288,8 @@ const EditorComponent: React.FC<Omit<MarkdownEditorProps, 'value' | 'onChange'> 
                     currentMarkdownRef.current = initialValue;
                 }
             }
-        } catch {
-            // Silently handle errors
+        } catch (error) {
+            handleError(error, { component: 'MarkdownEditor', action: 'syncInitialValue' });
         }
     }, [initialValue, get]);
 
@@ -328,9 +339,9 @@ const EditorComponent: React.FC<Omit<MarkdownEditorProps, 'value' | 'onChange'> 
         try {
             await navigator.clipboard.writeText(currentMarkdownRef.current);
             setCopyStatus('copied');
-            setTimeout(() => setCopyStatus('idle'), 2000);
-        } catch {
-            // Silently handle clipboard errors
+            setTimeout(() => setCopyStatus('idle'), COPY_SUCCESS_TIMEOUT_MS);
+        } catch (error) {
+            handleError(error, { component: 'MarkdownEditor', action: 'copyToClipboard' }, 'warning');
         }
     };
 
@@ -352,7 +363,9 @@ const EditorComponent: React.FC<Omit<MarkdownEditorProps, 'value' | 'onChange'> 
         const filename = window.prompt('Enter filename for HTML:', 'document');
         if (filename === null) return; // User cancelled
 
-        const safeFilename = (filename.trim() || 'document').replace(/[<>:"/\\|?*]/g, '_');
+        // Validate and sanitize filename
+        const filenameResult = validateFilename(filename);
+        const safeFilename = filenameResult.sanitized || 'document';
 
         const markdown = currentMarkdownRef.current;
 
@@ -544,13 +557,16 @@ const EditorComponent: React.FC<Omit<MarkdownEditorProps, 'value' | 'onChange'> 
 
         html = processedLines.join('\n');
 
+        // Sanitize the final HTML content to prevent XSS
+        html = sanitizeHtml(html);
+
         // Wrap in HTML structure with improved styles
         const fullHtml = `<!DOCTYPE html>
 <html lang="en">
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>${safeFilename}</title>
+    <title>${escapeHtml(safeFilename)}</title>
     <style>
         * { box-sizing: border-box; }
         body {
@@ -707,8 +723,8 @@ ${html}
                 }
             }
             setShowTemplates(false);
-        } catch {
-            // Silently handle errors
+        } catch (error) {
+            handleError(error, { component: 'MarkdownEditor', action: 'insertTemplate' });
         }
     };
 
@@ -776,6 +792,13 @@ ${html}
                 const file = item.getAsFile();
                 if (!file) continue;
 
+                // Validate image size
+                const sizeValidation = validateImageSize(file);
+                if (!sizeValidation.valid) {
+                    window.alert(sizeValidation.error);
+                    return;
+                }
+
                 try {
                     // Convert image to base64 data URL
                     const reader = new FileReader();
@@ -790,8 +813,8 @@ ${html}
                         }
                     };
                     reader.readAsDataURL(file);
-                } catch {
-                    // Silently handle errors
+                } catch (error) {
+                    handleError(error, { component: 'MarkdownEditor', action: 'pasteImage' });
                 }
                 return; // Image handled, exit
             }
@@ -844,7 +867,8 @@ ${html}
                         }
                     }
                 }
-            } catch {
+            } catch (error) {
+                handleError(error, { component: 'MarkdownEditor', action: 'pasteMarkdown' }, 'warning');
                 // If parsing fails, let default paste behavior handle it
             }
         }
@@ -1036,9 +1060,9 @@ ${html}
                                     <div className="dropdown-section-header">Insert New Table</div>
                                     <div className="table-size-picker">
                                         <div className="table-grid">
-                                            {Array.from({ length: 6 }).map((_, rowIndex) => (
+                                            {Array.from({ length: TABLE_GRID_SIZE }).map((_, rowIndex) => (
                                                 <div key={rowIndex} className="table-grid-row">
-                                                    {Array.from({ length: 6 }).map((_, colIndex) => (
+                                                    {Array.from({ length: TABLE_GRID_SIZE }).map((_, colIndex) => (
                                                         <div
                                                             key={colIndex}
                                                             className={`table-grid-cell ${
@@ -1054,7 +1078,7 @@ ${html}
                                             ))}
                                         </div>
                                         <div className="table-size-label">
-                                            {Math.max(2, hoveredCell.row + 1)} × {hoveredCell.col + 1} (min 2 rows)
+                                            {Math.max(TABLE_MIN_ROWS, hoveredCell.row + 1)} × {hoveredCell.col + 1} (min {TABLE_MIN_ROWS} rows)
                                         </div>
                                     </div>
                                     <div className="dropdown-divider" />
