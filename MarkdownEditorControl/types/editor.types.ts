@@ -10,6 +10,7 @@ export interface MarkdownEditorProps {
     maxLength?: number;
     height?: number;
     width?: number;
+    toolbarSize?: 'sm' | 'md' | 'lg';
 }
 
 export type SaveStatus = 'saved' | 'saving' | 'unsaved';

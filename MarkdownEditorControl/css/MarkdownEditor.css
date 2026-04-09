@@ -857,34 +857,6 @@
     font-weight: var(--fluent-font-weight-medium);
 }
 
-/* ========================================
-   TEMPLATES DROPDOWN - FLUENT 2.0
-   ======================================== */
-.templates-dropdown {
-    max-height: 400px;
-    overflow-y: auto;
-    min-width: 220px;
-}
-
-/* Custom scrollbar for templates */
-.templates-dropdown::-webkit-scrollbar {
-    width: 8px;
-}
-
-.templates-dropdown::-webkit-scrollbar-track {
-    background: var(--fluent-bg-secondary);
-    border-radius: var(--fluent-radius-small);
-}
-
-.templates-dropdown::-webkit-scrollbar-thumb {
-    background: var(--fluent-border-strong);
-    border-radius: var(--fluent-radius-small);
-}
-
-.templates-dropdown::-webkit-scrollbar-thumb:hover {
-    background: var(--fluent-fg-tertiary);
-}
-
 /* Search Highlight Styles */
 .search-highlight {
     background-color: rgba(255, 235, 59, 0.4);
@@ -1287,6 +1259,64 @@
         padding: 0 !important;
         overflow: visible !important;
     }
+}
+
+/* ========================================
+   TOOLBAR SIZE VARIANTS
+   ======================================== */
+
+/* Small toolbar */
+.toolbar-sm .toolbar-button {
+    min-width: 26px;
+    min-height: 26px;
+    padding: 2px 4px;
+}
+
+.toolbar-sm .toolbar-button-icon svg {
+    width: 16px;
+    height: 16px;
+}
+
+.toolbar-sm .toolbar-group {
+    padding: 2px;
+    gap: 1px;
+}
+
+.toolbar-sm .toolbar-divider {
+    height: 18px;
+}
+
+.toolbar-sm {
+    padding: 4px 8px;
+    gap: 4px;
+}
+
+/* Medium toolbar (default — no overrides needed) */
+
+/* Large toolbar */
+.toolbar-lg .toolbar-button {
+    min-width: 42px;
+    min-height: 42px;
+    padding: 6px 10px;
+}
+
+.toolbar-lg .toolbar-button-icon svg {
+    width: 24px;
+    height: 24px;
+}
+
+.toolbar-lg .toolbar-group {
+    padding: 4px;
+    gap: 3px;
+}
+
+.toolbar-lg .toolbar-divider {
+    height: 30px;
+}
+
+.toolbar-lg {
+    padding: 10px 14px;
+    gap: 10px;
 }
 
 /* Reduced motion support for accessibility */

@@ -19,14 +19,6 @@ export const TABLE_GRID_SIZE = 6;           // 6x6 table picker grid
 export const TABLE_MIN_ROWS = 2;            // Minimum rows (header + 1 data row)
 export const TABLE_MIN_COLS = 1;            // Minimum columns
 
-// PDF export constants
-export const PDF_PAGE_WIDTH_MM = 210;       // A4 width
-export const PDF_PAGE_HEIGHT_MM = 297;      // A4 height
-export const PDF_MARGIN_MM = 15;            // Page margins
-export const PDF_LINE_HEIGHT_MM = 5;        // Default line height
-export const PDF_CANVAS_SCALE = 1.5;        // html2canvas scale factor
-export const PDF_CODE_MAX_CHARS = 95;       // Max chars per code line
-
 // Windows reserved filenames (case-insensitive)
 export const RESERVED_FILENAMES = [
     'CON', 'PRN', 'AUX', 'NUL',

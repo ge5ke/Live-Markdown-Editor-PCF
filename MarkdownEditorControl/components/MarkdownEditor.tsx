@@ -9,13 +9,9 @@ import { Editor, rootCtx, defaultValueCtx, editorViewCtx, parserCtx, serializerC
 import { insertImageCommand } from '@milkdown/preset-commonmark';
 import { history } from '@milkdown/plugin-history';
 import '@milkdown/theme-nord/style.css';
-// PDF libraries lazy-loaded on demand from utils/exportPdf.ts
-
-// Import templates from separate module
-import { MARKDOWN_TEMPLATES } from '../utils/templates';
 
 // Import security utilities
-import { validateFilename, validateImageSize, sanitizeHtml, escapeHtml } from '../utils/security';
+import { validateImageSize } from '../utils/security';
 import { handleError } from '../utils/errorHandler';
 import {
     DEBOUNCE_SERIALIZE_MS,
@@ -28,41 +24,37 @@ import {
 // Import custom hooks
 import { useEditorCommands, useTableOperations, useFindReplace } from '../hooks';
 
-// Fluent UI Icons
+// Lucide Icons
 import {
-    ArrowUndoRegular,
-    ArrowRedoRegular,
-    TextBoldRegular,
-    TextItalicRegular,
-    TextStrikethroughRegular,
-    TextHeader1Regular,
-    TextHeader2Regular,
-    TextHeader3Regular,
-    TextParagraphRegular,
-    LinkRegular,
-    ImageRegular,
-    TextBulletListLtrRegular,
-    TextNumberListLtrRegular,
-    CodeRegular,
-    TableRegular,
-    TextQuoteRegular,
-    LineHorizontal1Regular,
-    CopyRegular,
-    CheckmarkRegular,
-    SearchRegular,
-    ArrowDownloadRegular,
-    DocumentPdfRegular,
-    DocumentRegular,
-    ChevronDownRegular,
-    ChevronUpRegular,
-    DismissRegular,
-    AddRegular,
-    SubtractRegular,
-    DeleteRegular,
-    CheckmarkCircleRegular,
-    ArrowSyncRegular,
-    CircleRegular,
-} from '@fluentui/react-icons';
+    Undo2,
+    Redo2,
+    Bold,
+    Italic,
+    Strikethrough,
+    Heading1,
+    Heading2,
+    Heading3,
+    Pilcrow,
+    Link,
+    Image,
+    List,
+    ListOrdered,
+    Code,
+    Table,
+    Quote,
+    Minus,
+    Copy,
+    Check,
+    Search,
+    ChevronDown,
+    ChevronUp,
+    X,
+    Plus,
+    Trash2,
+    CheckCircle,
+    RefreshCw,
+    Circle,
+} from 'lucide-react';
 
 // Inline SVG icons for theme toggle (avoids pulling in extra icon chunks)
 const SunIcon = () => (
@@ -89,8 +81,9 @@ export interface MarkdownEditorProps {
     showToolbar?: boolean;
     enableSpellCheck?: boolean;
     maxLength?: number;
-    height?: number; // Height in pixels for the editor container
-    width?: number; // Width in pixels for responsive behavior
+    height?: number;
+    width?: number;
+    toolbarSize?: 'sm' | 'md' | 'lg';
 }
 
 type SaveStatus = 'saved' | 'saving' | 'unsaved';
@@ -106,7 +99,8 @@ const EditorComponent: React.FC<Omit<MarkdownEditorProps, 'value' | 'onChange'> 
     showToolbar = true,
     maxLength = 100000,
     height,
-    width
+    width,
+    toolbarSize = 'md'
 }) => {
     // Use refs instead of state for stats to avoid re-renders on every keystroke
     const wordCountRef = useRef(0);
@@ -114,7 +108,6 @@ const EditorComponent: React.FC<Omit<MarkdownEditorProps, 'value' | 'onChange'> 
     const [editorError, setEditorError] = useState<string | null>(null);
     const [copyStatus, setCopyStatus] = useState<'idle' | 'copied'>('idle');
     const [saveStatus, setSaveStatus] = useState<SaveStatus>('saved');
-    const [showTemplates, setShowTemplates] = useState(false);
     const [showTablePicker, setShowTablePicker] = useState(false);
     const [tableSize, setTableSize] = useState<{ rows: number; cols: number }>({ rows: 3, cols: 3 });
     const [hoveredCell, setHoveredCell] = useState<{ row: number; col: number }>({ row: 0, col: 0 });
@@ -357,390 +350,18 @@ const EditorComponent: React.FC<Omit<MarkdownEditorProps, 'value' | 'onChange'> 
         handleReplace, handleReplaceAll
     } = findReplaceActions;
 
-    // Export to HTML
-    const exportToHtml = () => {
-        // Ask for filename
-        const filename = window.prompt('Enter filename for HTML:', 'document');
-        if (filename === null) return; // User cancelled
-
-        // Validate and sanitize filename
-        const filenameResult = validateFilename(filename);
-        const safeFilename = filenameResult.sanitized || 'document';
-
-        const markdown = currentMarkdownRef.current;
-
-        // Process tables first (multi-line)
-        const processTable = (tableText: string): string => {
-            const lines = tableText.trim().split('\n');
-            if (lines.length < 2) return tableText;
-
-            let html = '<table>\n<thead>\n';
-            let isHeader = true;
-            let inBody = false;
-
-            for (const line of lines) {
-                // Skip separator lines but mark transition to body
-                if (line.match(/^\|[\s\-:|]+\|$/)) {
-                    if (isHeader) {
-                        html += '</thead>\n<tbody>\n';
-                        isHeader = false;
-                        inBody = true;
-                    }
-                    continue;
-                }
-
-                if (line.trim().startsWith('|') && line.trim().endsWith('|')) {
-                    const cells = line.split('|').slice(1, -1).map(c => c.trim());
-                    const tag = isHeader ? 'th' : 'td';
-                    html += '  <tr>\n';
-                    for (const cell of cells) {
-                        // Process inline markdown in cells
-                        const cellHtml = cell
-                            .replace(/\*\*(.*?)\*\*/g, '<strong>$1</strong>')
-                            .replace(/\*(.*?)\*/g, '<em>$1</em>')
-                            .replace(/`([^`]+)`/g, '<code>$1</code>');
-                        html += `    <${tag}>${cellHtml}</${tag}>\n`;
-                    }
-                    html += '  </tr>\n';
-                }
-            }
-
-            if (inBody) {
-                html += '</tbody>\n';
-            }
-            html += '</table>';
-            return html;
-        };
-
-        // Find and replace tables first
-        let html = markdown;
-        const tableRegex = /(\|[^\n]+\|\n)+/g;
-        html = html.replace(tableRegex, (match) => processTable(match));
-
-        // Process code blocks before other replacements (to protect content)
-        const codeBlocks: string[] = [];
-        html = html.replace(/```(\w*)\n([\s\S]*?)```/g, (_match, lang, code) => {
-            const index = codeBlocks.length;
-            codeBlocks.push(`<pre><code class="language-${lang}">${code.replace(/</g, '&lt;').replace(/>/g, '&gt;')}</code></pre>`);
-            return `%%CODEBLOCK_${index}%%`;
-        });
-
-        // Process inline code (protect from other replacements)
-        const inlineCodes: string[] = [];
-        html = html.replace(/`([^`]+)`/g, (_match, code) => {
-            const index = inlineCodes.length;
-            inlineCodes.push(`<code>${code.replace(/</g, '&lt;').replace(/>/g, '&gt;')}</code>`);
-            return `%%INLINECODE_${index}%%`;
-        });
-
-        // Process the rest of the markdown
-        html = html
-            // Headers (order matters - longest first)
-            .replace(/^#### (.*$)/gim, '<h4>$1</h4>')
-            .replace(/^### (.*$)/gim, '<h3>$1</h3>')
-            .replace(/^## (.*$)/gim, '<h2>$1</h2>')
-            .replace(/^# (.*$)/gim, '<h1>$1</h1>')
-            // Bold and italic (order matters)
-            .replace(/\*\*\*(.*?)\*\*\*/g, '<strong><em>$1</em></strong>')
-            .replace(/\*\*(.*?)\*\*/g, '<strong>$1</strong>')
-            .replace(/\*(.*?)\*/g, '<em>$1</em>')
-            .replace(/~~(.*?)~~/g, '<del>$1</del>')
-            // Links and images
-            .replace(/!\[(.*?)\]\((.*?)\)/g, '<img src="$2" alt="$1" />')
-            .replace(/\[(.*?)\]\((.*?)\)/g, '<a href="$2">$1</a>')
-            // Task lists (before regular lists)
-            .replace(/^- \[x\] (.*$)/gim, '<li class="task-done"><input type="checkbox" checked disabled /> $1</li>')
-            .replace(/^- \[ \] (.*$)/gim, '<li class="task"><input type="checkbox" disabled /> $1</li>')
-            // Unordered lists
-            .replace(/^[-*+] (.*$)/gim, '<li>$1</li>')
-            // Ordered lists
-            .replace(/^\d+\. (.*$)/gim, '<li class="ordered">$1</li>')
-            // Blockquotes (handle multi-line)
-            .replace(/^> (.*$)/gim, '<blockquote>$1</blockquote>')
-            // Horizontal rule
-            .replace(/^---$/gim, '<hr />')
-            .replace(/^\*\*\*$/gim, '<hr />')
-            .replace(/^___$/gim, '<hr />');
-
-        // Wrap consecutive unordered <li> items in <ul> tags
-        html = html.replace(/((?:<li>.*?<\/li>\n?)+)/g, '<ul>\n$1</ul>\n');
-        // Wrap consecutive ordered <li> items in <ol> tags
-        html = html.replace(/((?:<li class="ordered">.*?<\/li>\n?)+)/g, (match) => {
-            return '<ol>\n' + match.replace(/<li class="ordered">/g, '<li>') + '</ol>\n';
-        });
-        // Wrap task list items properly
-        html = html.replace(/((?:<li class="task(?:-done)?">.*?<\/li>\n?)+)/g, '<ul class="task-list">\n$1</ul>\n');
-
-        // Clean up consecutive blockquotes
-        html = html.replace(/<\/blockquote>\n<blockquote>/g, '\n');
-
-        // Restore code blocks and inline code
-        for (let i = 0; i < codeBlocks.length; i++) {
-            html = html.replace(`%%CODEBLOCK_${i}%%`, codeBlocks[i]);
-        }
-        for (let i = 0; i < inlineCodes.length; i++) {
-            html = html.replace(`%%INLINECODE_${i}%%`, inlineCodes[i]);
-        }
-
-        // Convert content to paragraphs, but not block elements
-        const lines = html.split('\n');
-        const processedLines: string[] = [];
-        let inParagraph = false;
-        let inBlockElement = false;
-
-        // Block element tags that should not be wrapped in paragraphs
-        const isBlockStart = (s: string) => {
-            return s.startsWith('<table') || s.startsWith('<thead') || s.startsWith('<tbody') ||
-                   s.startsWith('<tr') || s.startsWith('<pre') || s.startsWith('<ul') ||
-                   s.startsWith('<ol') || s.startsWith('<blockquote') || s.startsWith('<h1') ||
-                   s.startsWith('<h2') || s.startsWith('<h3') || s.startsWith('<h4') ||
-                   s.startsWith('<hr');
-        };
-
-        const isBlockEnd = (s: string) => {
-            return s.startsWith('</table') || s.startsWith('</thead') || s.startsWith('</tbody') ||
-                   s.startsWith('</tr') || s.startsWith('</pre') || s.startsWith('</ul') ||
-                   s.startsWith('</ol') || s.startsWith('</blockquote') || s.startsWith('</h1') ||
-                   s.startsWith('</h2') || s.startsWith('</h3') || s.startsWith('</h4');
-        };
-
-        const isInsideBlock = (s: string) => {
-            return s.startsWith('<th') || s.startsWith('</th') ||
-                   s.startsWith('<td') || s.startsWith('</td') ||
-                   s.startsWith('<code') || s.startsWith('</code') ||
-                   s.startsWith('<li') || s.startsWith('</li');
-        };
-
-        for (const line of lines) {
-            const trimmed = line.trim();
-
-            // Skip empty lines but close any open paragraph
-            if (!trimmed) {
-                if (inParagraph) {
-                    processedLines.push('</p>');
-                    inParagraph = false;
-                }
-                continue;
-            }
-
-            // Track block element nesting
-            if (isBlockStart(trimmed)) {
-                if (inParagraph) {
-                    processedLines.push('</p>');
-                    inParagraph = false;
-                }
-                inBlockElement = true;
-                processedLines.push(line);
-            } else if (isBlockEnd(trimmed)) {
-                processedLines.push(line);
-                // Only exit block mode on table/list end, not sub-elements
-                if (trimmed.startsWith('</table') || trimmed.startsWith('</ul') ||
-                    trimmed.startsWith('</ol') || trimmed.startsWith('</pre')) {
-                    inBlockElement = false;
-                }
-            } else if (inBlockElement || isInsideBlock(trimmed)) {
-                // Inside a block element, don't wrap in paragraphs
-                processedLines.push(line);
-            } else {
-                // Regular text - wrap in paragraphs
-                if (!inParagraph) {
-                    processedLines.push('<p>' + trimmed);
-                    inParagraph = true;
-                } else {
-                    processedLines.push('<br />' + trimmed);
-                }
-            }
-        }
-        if (inParagraph) {
-            processedLines.push('</p>');
-        }
-
-        html = processedLines.join('\n');
-
-        // Sanitize the final HTML content to prevent XSS
-        html = sanitizeHtml(html);
-
-        // Wrap in HTML structure with improved styles
-        const fullHtml = `<!DOCTYPE html>
-<html lang="en">
-<head>
-    <meta charset="UTF-8">
-    <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>${escapeHtml(safeFilename)}</title>
-    <style>
-        * { box-sizing: border-box; }
-        body {
-            font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, Oxygen, Ubuntu, sans-serif;
-            max-width: 900px;
-            margin: 40px auto;
-            padding: 20px;
-            line-height: 1.7;
-            color: #333;
-            background: #fff;
-        }
-        h1 { font-size: 2em; margin: 1em 0 0.5em 0; color: #222; border-bottom: 2px solid #eee; padding-bottom: 0.3em; }
-        h2 { font-size: 1.5em; margin: 1em 0 0.5em 0; color: #333; border-bottom: 1px solid #eee; padding-bottom: 0.2em; }
-        h3 { font-size: 1.25em; margin: 1em 0 0.5em 0; color: #444; }
-        h4 { font-size: 1em; margin: 1em 0 0.5em 0; color: #555; font-weight: 600; }
-        p { margin: 0.8em 0; }
-        code {
-            background: #f4f4f4;
-            padding: 2px 6px;
-            border-radius: 3px;
-            font-family: 'Consolas', 'Monaco', 'Courier New', monospace;
-            font-size: 0.9em;
-        }
-        pre {
-            background: #f8f8f8;
-            padding: 16px;
-            border-radius: 6px;
-            overflow-x: auto;
-            border: 1px solid #e1e4e8;
-            margin: 1em 0;
-        }
-        pre code {
-            background: none;
-            padding: 0;
-            font-size: 0.85em;
-            line-height: 1.5;
-        }
-        blockquote {
-            border-left: 4px solid #0078d4;
-            padding: 0.5em 1em;
-            margin: 1em 0;
-            color: #555;
-            background: #f9f9f9;
-        }
-        table {
-            border-collapse: collapse;
-            width: 100%;
-            margin: 0.5em 0;
-        }
-        th, td {
-            border: 1px solid #ddd;
-            padding: 10px 14px;
-            text-align: left;
-        }
-        th {
-            background: #f5f5f5;
-            font-weight: 600;
-        }
-        tr:nth-child(even) td {
-            background: #fafafa;
-        }
-        ul, ol {
-            margin: 0.8em 0;
-            padding-left: 2em;
-        }
-        li {
-            margin: 0.3em 0;
-        }
-        ul.task-list {
-            list-style: none;
-            padding-left: 0;
-        }
-        ul.task-list li {
-            padding-left: 1.5em;
-            position: relative;
-        }
-        ul.task-list input[type="checkbox"] {
-            position: absolute;
-            left: 0;
-            top: 0.3em;
-        }
-        img {
-            max-width: 100%;
-            height: auto;
-            border-radius: 4px;
-        }
-        a {
-            color: #0078d4;
-            text-decoration: none;
-        }
-        a:hover {
-            text-decoration: underline;
-        }
-        hr {
-            border: none;
-            border-top: 1px solid #e1e4e8;
-            margin: 2em 0;
-        }
-        del {
-            color: #888;
-        }
-    </style>
-</head>
-<body>
-${html}
-</body>
-</html>`;
-
-        // Download the file
-        const blob = new Blob([fullHtml], { type: 'text/html' });
-        const url = URL.createObjectURL(blob);
-        const a = document.createElement('a');
-        a.href = url;
-        a.download = `${safeFilename}.html`;
-        document.body.appendChild(a);
-        a.click();
-        document.body.removeChild(a);
-        URL.revokeObjectURL(url);
-    };
-
-    // Export to PDF - lazy loaded to reduce bundle size
-    const exportToPdf = async () => {
-        const editorElement = containerRef.current?.querySelector('.milkdown') as HTMLElement | null;
-        const { exportToPdf: lazyExportToPdf } = await import('../utils/exportPdf');
-        await lazyExportToPdf(currentMarkdownRef.current, editorElement, 'document');
-    };
-
-    // Insert template
-    const insertTemplate = (template: typeof MARKDOWN_TEMPLATES[0]) => {
-        if (!get) return;
-        try {
-            const editor = get();
-            if (!editor) return;
-
-            const view = editor.ctx.get(editorViewCtx);
-            const parser = editor.ctx.get(parserCtx);
-
-            if (view && parser) {
-                const { state, dispatch } = view;
-                // Parse the markdown template into a ProseMirror document
-                const doc = parser(template.content);
-
-                if (doc) {
-                    // Replace all content or insert at cursor
-                    if (currentMarkdownRef.current.trim() === '') {
-                        // Replace entire document
-                        const tr = state.tr.replaceWith(0, state.doc.content.size, doc.content);
-                        dispatch(tr);
-                    } else {
-                        // Insert at current position
-                        const tr = state.tr.replaceSelectionWith(doc);
-                        dispatch(tr);
-                    }
-                }
-            }
-            setShowTemplates(false);
-        } catch (error) {
-            handleError(error, { component: 'MarkdownEditor', action: 'insertTemplate' });
-        }
-    };
-
     // Close dropdowns when clicking outside
     useEffect(() => {
         const handleClickOutside = (e: MouseEvent) => {
             if (containerRef.current && !containerRef.current.contains(e.target as Node)) {
-                setShowTemplates(false);
                 setShowTablePicker(false);
             }
         };
-        if (showTemplates || showTablePicker) {
+        if (showTablePicker) {
             document.addEventListener('mousedown', handleClickOutside);
             return () => document.removeEventListener('mousedown', handleClickOutside);
         }
-    }, [showTemplates, showTablePicker]);
+    }, [showTablePicker]);
 
     // Helper function to detect if text looks like markdown
     const looksLikeMarkdown = (text: string): boolean => {
@@ -899,7 +520,7 @@ ${html}
             style={height ? { height: `${height}px`, minHeight: `${height}px`, maxHeight: `${height}px` } : undefined}
         >
             {showToolbar && !readOnly && (
-                <div className={`markdown-toolbar ${effectiveTheme}`}>
+                <div className={`markdown-toolbar toolbar-${toolbarSize} ${effectiveTheme}`}>
                     {/* History Group */}
                     <div className="toolbar-group" aria-label="History">
                         <button
@@ -908,7 +529,7 @@ ${html}
                             title="Undo (Ctrl+Z)"
                             aria-label="Undo"
                         >
-                            <span className="toolbar-button-icon"><ArrowUndoRegular /></span>
+                            <span className="toolbar-button-icon"><Undo2 size={20} /></span>
                         </button>
                         <button
                             className="toolbar-button"
@@ -916,7 +537,7 @@ ${html}
                             title="Redo (Ctrl+Y)"
                             aria-label="Redo"
                         >
-                            <span className="toolbar-button-icon"><ArrowRedoRegular /></span>
+                            <span className="toolbar-button-icon"><Redo2 size={20} /></span>
                         </button>
                     </div>
 
@@ -930,7 +551,7 @@ ${html}
                             title="Heading 1 (Ctrl+Alt+1)"
                             aria-label="Insert Heading 1"
                         >
-                            <span className="toolbar-button-icon"><TextHeader1Regular /></span>
+                            <span className="toolbar-button-icon"><Heading1 size={20} /></span>
                         </button>
                         <button
                             className="toolbar-button"
@@ -938,7 +559,7 @@ ${html}
                             title="Heading 2 (Ctrl+Alt+2)"
                             aria-label="Insert Heading 2"
                         >
-                            <span className="toolbar-button-icon"><TextHeader2Regular /></span>
+                            <span className="toolbar-button-icon"><Heading2 size={20} /></span>
                         </button>
                         <button
                             className="toolbar-button"
@@ -946,7 +567,7 @@ ${html}
                             title="Heading 3 (Ctrl+Alt+3)"
                             aria-label="Insert Heading 3"
                         >
-                            <span className="toolbar-button-icon"><TextHeader3Regular /></span>
+                            <span className="toolbar-button-icon"><Heading3 size={20} /></span>
                         </button>
                         <button
                             className="toolbar-button"
@@ -954,7 +575,7 @@ ${html}
                             title="Paragraph (Ctrl+Alt+0)"
                             aria-label="Clear Heading Formatting"
                         >
-                            <span className="toolbar-button-icon"><TextParagraphRegular /></span>
+                            <span className="toolbar-button-icon"><Pilcrow size={20} /></span>
                         </button>
                     </div>
 
@@ -968,7 +589,7 @@ ${html}
                             title="Bold (Ctrl+B)"
                             aria-label="Toggle Bold"
                         >
-                            <span className="toolbar-button-icon"><TextBoldRegular /></span>
+                            <span className="toolbar-button-icon"><Bold size={20} /></span>
                         </button>
                         <button
                             className="toolbar-button"
@@ -976,7 +597,7 @@ ${html}
                             title="Italic (Ctrl+I)"
                             aria-label="Toggle Italic"
                         >
-                            <span className="toolbar-button-icon"><TextItalicRegular /></span>
+                            <span className="toolbar-button-icon"><Italic size={20} /></span>
                         </button>
                         <button
                             className="toolbar-button"
@@ -984,7 +605,7 @@ ${html}
                             title="Strikethrough (Ctrl+Shift+S)"
                             aria-label="Toggle Strikethrough"
                         >
-                            <span className="toolbar-button-icon"><TextStrikethroughRegular /></span>
+                            <span className="toolbar-button-icon"><Strikethrough size={20} /></span>
                         </button>
                     </div>
 
@@ -998,7 +619,7 @@ ${html}
                             title="Insert Link (Ctrl+K)"
                             aria-label="Insert Link"
                         >
-                            <span className="toolbar-button-icon"><LinkRegular /></span>
+                            <span className="toolbar-button-icon"><Link size={20} /></span>
                         </button>
                         <button
                             className="toolbar-button"
@@ -1006,7 +627,7 @@ ${html}
                             title="Insert Image"
                             aria-label="Insert Image"
                         >
-                            <span className="toolbar-button-icon"><ImageRegular /></span>
+                            <span className="toolbar-button-icon"><Image size={20} /></span>
                         </button>
                     </div>
 
@@ -1020,7 +641,7 @@ ${html}
                             title="Bullet List"
                             aria-label="Insert Bullet List"
                         >
-                            <span className="toolbar-button-icon"><TextBulletListLtrRegular /></span>
+                            <span className="toolbar-button-icon"><List size={20} /></span>
                         </button>
                         <button
                             className="toolbar-button"
@@ -1028,7 +649,7 @@ ${html}
                             title="Numbered List"
                             aria-label="Insert Numbered List"
                         >
-                            <span className="toolbar-button-icon"><TextNumberListLtrRegular /></span>
+                            <span className="toolbar-button-icon"><ListOrdered size={20} /></span>
                         </button>
                     </div>
 
@@ -1042,7 +663,7 @@ ${html}
                             title="Code Block"
                             aria-label="Insert Code Block"
                         >
-                            <span className="toolbar-button-icon"><CodeRegular /></span>
+                            <span className="toolbar-button-icon"><Code size={20} /></span>
                         </button>
                         <div className="toolbar-dropdown-container">
                             <button
@@ -1052,8 +673,8 @@ ${html}
                                 aria-label="Table Options"
                                 aria-expanded={showTablePicker}
                             >
-                                <span className="toolbar-button-icon"><TableRegular /></span>
-                                <span className="toolbar-button-icon dropdown-chevron"><ChevronDownRegular /></span>
+                                <span className="toolbar-button-icon"><Table size={20} /></span>
+                                <span className="toolbar-button-icon dropdown-chevron"><ChevronDown size={12} /></span>
                             </button>
                             {showTablePicker && (
                                 <div className={`toolbar-dropdown table-dropdown ${effectiveTheme}`}>
@@ -1084,24 +705,24 @@ ${html}
                                     <div className="dropdown-divider" />
                                     <div className="dropdown-section-header">Edit Existing Table</div>
                                     <button className="dropdown-item" onClick={addTableRow}>
-                                        <span className="dropdown-icon"><AddRegular /></span>
+                                        <span className="dropdown-icon"><Plus size={16} /></span>
                                         <span>Add Row Below</span>
                                     </button>
                                     <button className="dropdown-item" onClick={addTableColumn}>
-                                        <span className="dropdown-icon"><AddRegular /></span>
+                                        <span className="dropdown-icon"><Plus size={16} /></span>
                                         <span>Add Column Right</span>
                                     </button>
                                     <button className="dropdown-item" onClick={deleteTableRow}>
-                                        <span className="dropdown-icon"><SubtractRegular /></span>
+                                        <span className="dropdown-icon"><Minus size={16} /></span>
                                         <span>Delete Row</span>
                                     </button>
                                     <button className="dropdown-item" onClick={deleteTableColumn}>
-                                        <span className="dropdown-icon"><SubtractRegular /></span>
+                                        <span className="dropdown-icon"><Minus size={16} /></span>
                                         <span>Delete Column</span>
                                     </button>
                                     <div className="dropdown-divider" />
                                     <button className="dropdown-item dropdown-item-danger" onClick={deleteTable}>
-                                        <span className="dropdown-icon"><DeleteRegular /></span>
+                                        <span className="dropdown-icon"><Trash2 size={16} /></span>
                                         <span>Delete Entire Table</span>
                                     </button>
                                 </div>
@@ -1113,7 +734,7 @@ ${html}
                             title="Blockquote"
                             aria-label="Insert Blockquote"
                         >
-                            <span className="toolbar-button-icon"><TextQuoteRegular /></span>
+                            <span className="toolbar-button-icon"><Quote size={20} /></span>
                         </button>
                         <button
                             className="toolbar-button"
@@ -1121,7 +742,7 @@ ${html}
                             title="Horizontal Rule"
                             aria-label="Insert Horizontal Rule"
                         >
-                            <span className="toolbar-button-icon"><LineHorizontal1Regular /></span>
+                            <span className="toolbar-button-icon"><Minus size={20} /></span>
                         </button>
                     </div>
 
@@ -1136,7 +757,7 @@ ${html}
                             aria-label="Copy markdown to clipboard"
                         >
                             <span className="toolbar-button-icon">
-                                {copyStatus === 'copied' ? <CheckmarkRegular /> : <CopyRegular />}
+                                {copyStatus === 'copied' ? <Check size={20} /> : <Copy size={20} />}
                             </span>
                         </button>
                         <button
@@ -1145,65 +766,8 @@ ${html}
                             title="Find & Replace (Ctrl+F)"
                             aria-label="Find and Replace"
                         >
-                            <span className="toolbar-button-icon"><SearchRegular /></span>
+                            <span className="toolbar-button-icon"><Search size={20} /></span>
                         </button>
-                        <button
-                            className="toolbar-button"
-                            onClick={exportToHtml}
-                            title="Export to HTML"
-                            aria-label="Export to HTML"
-                        >
-                            <span className="toolbar-button-icon"><ArrowDownloadRegular /></span>
-                            <span className="toolbar-button-label">HTML</span>
-                        </button>
-                        <button
-                            className="toolbar-button"
-                            onClick={exportToPdf}
-                            title="Export to PDF"
-                            aria-label="Export to PDF"
-                        >
-                            <span className="toolbar-button-icon"><DocumentPdfRegular /></span>
-                            <span className="toolbar-button-label">PDF</span>
-                        </button>
-                    </div>
-
-                    <div className="toolbar-divider" />
-
-                    {/* Templates Dropdown */}
-                    <div className="toolbar-dropdown-container">
-                        <button
-                            className={`toolbar-button toolbar-dropdown-trigger ${showTemplates ? 'active' : ''}`}
-                            onClick={() => setShowTemplates(!showTemplates)}
-                            title="Insert Template"
-                            aria-label="Insert Template"
-                            aria-expanded={showTemplates}
-                        >
-                            <span className="toolbar-button-icon"><DocumentRegular /></span>
-                            <span className="toolbar-button-label">Templates</span>
-                            <span className="toolbar-button-icon dropdown-chevron"><ChevronDownRegular /></span>
-                        </button>
-                        {showTemplates && (
-                            <div className={`toolbar-dropdown templates-dropdown ${effectiveTheme}`}>
-                                {/* Group templates by category */}
-                                {Array.from(new Set(MARKDOWN_TEMPLATES.map(t => t.category))).map((category, catIndex) => (
-                                    <div key={category} className="dropdown-category">
-                                        {catIndex > 0 && <div className="dropdown-divider" />}
-                                        <div className="dropdown-section-header">{category}</div>
-                                        {MARKDOWN_TEMPLATES
-                                            .filter(t => t.category === category)
-                                            .map((template, index) => (
-                                                <button
-                                                    key={`${category}-${index}`}
-                                                    className="dropdown-item"
-                                                    onClick={() => insertTemplate(template)}
-                                                >
-                                                    {template.name}
-                                                </button>
-                                            ))}
-                                    </div>
-                                ))}
-                            </div>
-                        )}
                     </div>
 
                     <div className="toolbar-divider" />
@@ -1227,7 +791,7 @@ ${html}
                 <div className={`find-replace-panel ${effectiveTheme}`}>
                     <div className="find-replace-row">
                         <div className="find-input-wrapper">
-                            <span className="find-input-icon"><SearchRegular /></span>
+                            <span className="find-input-icon"><Search size={20} /></span>
                             <input
                                 ref={findInputRef}
                                 type="text"
@@ -1253,7 +817,7 @@ ${html}
                             disabled={findResults.count === 0}
                             title="Previous match (Shift+Enter)"
                         >
-                            <ChevronUpRegular />
+                            <ChevronUp size={16} />
                         </button>
                         <button
                             className="find-nav-button"
@@ -1261,7 +825,7 @@ ${html}
                             disabled={findResults.count === 0}
                             title="Next match (Enter)"
                         >
-                            <ChevronDownRegular />
+                            <ChevronDown size={12} />
                         </button>
                         <span className="find-results">
                             {findResults.count > 0 ? `${findResults.current} of ${findResults.count}` : 'No results'}
@@ -1283,7 +847,7 @@ ${html}
                         </button>
                     </div>
                     <button className="find-close" onClick={closeFindReplace}>
-                        <DismissRegular />
+                        <X size={16} />
                     </button>
                 </div>
             )}
@@ -1314,19 +878,19 @@ ${html}
                 <div className="status-item save-status-container">
                     {saveStatus === 'saved' && (
                         <>
-                            <span className="status-icon status-icon-saved"><CheckmarkCircleRegular /></span>
+                            <span className="status-icon status-icon-saved"><CheckCircle size={16} /></span>
                             <span className="save-status save-status-saved">Saved</span>
                         </>
                     )}
                     {saveStatus === 'saving' && (
                         <>
-                            <span className="status-icon status-icon-saving spinning"><ArrowSyncRegular /></span>
+                            <span className="status-icon status-icon-saving spinning"><RefreshCw size={16} /></span>
                             <span className="save-status save-status-saving">Saving...</span>
                         </>
                     )}
                     {saveStatus === 'unsaved' && (
                         <>
-                            <span className="status-icon status-icon-unsaved"><CircleRegular /></span>
+                            <span className="status-icon status-icon-unsaved"><Circle size={16} /></span>
                             <span className="save-status save-status-unsaved">Unsaved</span>
                         </>
                     )}
@@ -1360,6 +924,7 @@ export const MarkdownEditor: React.FC<MarkdownEditorProps> = React.memo((props) 
                 maxLength={props.maxLength}
                 height={props.height}
                 width={props.width}
+                toolbarSize={props.toolbarSize}
             />
         </MilkdownProvider>
     );
@@ -1373,7 +938,8 @@ export const MarkdownEditor: React.FC<MarkdownEditorProps> = React.memo((props) 
         prev.enableSpellCheck === next.enableSpellCheck &&
         prev.maxLength === next.maxLength &&
         prev.height === next.height &&
-        prev.width === next.width
+        prev.width === next.width &&
+        prev.toolbarSize === next.toolbarSize
         // onChange is bound once in PCF constructor, always same reference
     );
 });

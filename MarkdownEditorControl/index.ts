@@ -91,7 +91,9 @@ export class MarkdownEditorControl implements ComponentFramework.StandardControl
             enableSpellCheck: context.parameters.enableSpellCheck?.raw,
             rows: context.parameters.rows?.raw,
             maxLength: this._maxLength,
-            width: context.mode.allocatedWidth
+            width: context.mode.allocatedWidth,
+            toolbarSize: context.parameters.toolbarSize?.raw,
+            editorHeight: context.parameters.editorHeight?.raw
         });
 
         // Only re-render if props actually changed (prevents unnecessary React re-renders)
@@ -114,13 +116,17 @@ export class MarkdownEditorControl implements ComponentFramework.StandardControl
         const enableSpellCheck = context.parameters.enableSpellCheck?.raw !== false;
         const rowsParam = context.parameters.rows?.raw;
         const rows = rowsParam || 10;
+        const editorHeightParam = context.parameters.editorHeight?.raw;
+        const toolbarSizeParam = context.parameters.toolbarSize?.raw || "md";
+        const toolbarSize = (["sm", "md", "lg"].includes(toolbarSizeParam) ? toolbarSizeParam : "md") as "sm" | "md" | "lg";
 
         // Get allocated dimensions from context
         const allocatedWidth = context.mode.allocatedWidth;
 
-        // Calculate height from rows setting
-        // Each row is approximately 54px (calibrated to match Power Apps web resource at 22 rows)
-        const height = rows * 54 + 50;
+        // Calculate height: editorHeight (pixels) takes precedence over rows
+        const height = editorHeightParam && editorHeightParam > 0
+            ? editorHeightParam
+            : rows * 54 + 50;
         const width = allocatedWidth > 0 ? allocatedWidth : undefined;
 
         // Create root if it doesn't exist
@@ -139,7 +145,8 @@ export class MarkdownEditorControl implements ComponentFramework.StandardControl
                 enableSpellCheck: enableSpellCheck,
                 maxLength: this._maxLength,
                 height: height,
-                width: width
+                width: width,
+                toolbarSize: toolbarSize
             })
         );
     }

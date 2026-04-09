@@ -14,6 +14,8 @@
     <property name="theme" display-name-key="Theme" description-key="Editor theme: light, dark, auto, or high-contrast" of-type="SingleLine.Text" usage="input" required="false" />
     <property name="showToolbar" display-name-key="Show Toolbar" description-key="Show or hide the formatting toolbar" of-type="TwoOptions" usage="input" required="false" />
     <property name="enableSpellCheck" display-name-key="Enable Spell Check" description-key="Enable spell checking" of-type="TwoOptions" usage="input" required="false" />
+    <property name="toolbarSize" display-name-key="Toolbar Size" description-key="Toolbar button size: sm, md, or lg (default: md)" of-type="SingleLine.Text" usage="input" required="false" />
+    <property name="editorHeight" display-name-key="Editor Height" description-key="Fixed editor height in pixels (overrides rows)" of-type="Whole.None" usage="input" required="false" />
 
     <!-- Output properties -->
     <property name="wordCount" display-name-key="Word Count" description-key="Current word count" of-type="Whole.None" usage="output" />

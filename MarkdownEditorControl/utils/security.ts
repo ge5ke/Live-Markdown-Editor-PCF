@@ -3,7 +3,6 @@
  * URL validation, HTML sanitization, and input validation functions
  */
 
-import DOMPurify from 'dompurify';
 import {
     DANGEROUS_PROTOCOLS,
     SAFE_LINK_PROTOCOLS,
@@ -182,64 +181,6 @@ export function validateImageSize(file: File | null, maxBytes: number = MAX_IMAG
     }
 
     return { valid: true };
-}
-
-/**
- * Sanitizes HTML content using DOMPurify
- * Removes scripts, event handlers, and other potentially dangerous content
- */
-export function sanitizeHtml(html: string): string {
-    if (!html || typeof html !== 'string') {
-        return '';
-    }
-
-    // Configure DOMPurify to allow safe HTML elements
-    const clean = DOMPurify.sanitize(html, {
-        ALLOWED_TAGS: [
-            'h1', 'h2', 'h3', 'h4', 'h5', 'h6',
-            'p', 'br', 'hr',
-            'ul', 'ol', 'li',
-            'table', 'thead', 'tbody', 'tr', 'th', 'td',
-            'blockquote', 'pre', 'code',
-            'strong', 'em', 'del', 'u', 's',
-            'a', 'img',
-            'div', 'span',
-            'input' // For checkboxes in task lists
-        ],
-        ALLOWED_ATTR: [
-            'href', 'src', 'alt', 'title',
-            'class', 'id',
-            'type', 'checked', 'disabled', // For checkboxes
-            'colspan', 'rowspan', // For tables
-            'target', 'rel' // For links
-        ],
-        ALLOW_DATA_ATTR: false,
-        ADD_ATTR: ['target'], // Add target="_blank" capability
-        FORBID_TAGS: ['script', 'style', 'iframe', 'form', 'object', 'embed'],
-        FORBID_ATTR: ['onerror', 'onclick', 'onload', 'onmouseover', 'onfocus']
-    });
-
-    return clean;
-}
-
-/**
- * Escapes HTML special characters for safe display
- * Use for inserting user content into HTML contexts
- */
-export function escapeHtml(text: string): string {
-    if (!text || typeof text !== 'string') {
-        return '';
-    }
-
-    const escapeMap: Record<string, string> = {
-        '&': '&amp;',
-        '<': '&lt;',
-        '>': '&gt;',
-        '"': '&quot;',
-        "'": '&#39;'
-    };
-
-    return text.replace(/[&<>"']/g, char => escapeMap[char]);
 }
 
 /**
