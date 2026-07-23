@@ -23,7 +23,7 @@ export class MarkdownEditorControl implements ComponentFramework.StandardControl
     private _isValid: boolean;
     private _maxLength: number;
     private _root: Root | null;
-    private _boundHandleChange: (value: string) => void;
+    private _boundHandleChange: (value: string, stats: { words: number; chars: number }) => void;
     private _lastReadOnly: boolean;
     private _lastShowToolbar: boolean;
     private _lastEnableSpellCheck: boolean;
@@ -199,14 +199,14 @@ export class MarkdownEditorControl implements ComponentFramework.StandardControl
     /**
      * Handles markdown content change from the editor.
      * Only invoked on flush (blur/unmount), so eager, synchronous notification is correct.
+     * Stats arrive pre-computed from the component (same doc.textContent-based metric used by
+     * the status bar) rather than being recomputed here from the serialized markdown, so the
+     * word/character outputs can never disagree with what the user sees on screen.
      */
-    private handleChange(value: string): void {
+    private handleChange(value: string, stats: { words: number; chars: number }): void {
         this._currentValue = value;
-
-        // Update statistics using regex (more efficient than split/filter)
-        const wordMatches = value.match(/\S+/g);
-        this._wordCount = wordMatches ? wordMatches.length : 0;
-        this._characterCount = value.length;
+        this._wordCount = stats.words;
+        this._characterCount = stats.chars;
 
         // Validate against max length
         this._isValid = this._characterCount <= this._maxLength;

@@ -8,6 +8,8 @@ import { listener, listenerCtx } from '@milkdown/plugin-listener';
 import { Editor, rootCtx, defaultValueCtx, editorViewCtx, editorViewOptionsCtx, parserCtx, serializerCtx } from '@milkdown/core';
 import { insertImageCommand } from '@milkdown/preset-commonmark';
 import { history } from '@milkdown/plugin-history';
+import { $prose } from '@milkdown/utils';
+import { Plugin, PluginKey } from '@milkdown/prose/state';
 import '@milkdown/theme-nord/style.css';
 
 // Import security utilities
@@ -52,9 +54,14 @@ import {
 // Module-level regex constants (compiled once)
 const WORD_MATCH_REGEX = /\S+/g;
 
+export interface MarkdownStats {
+    words: number;
+    chars: number;
+}
+
 export interface MarkdownEditorProps {
     value: string;
-    onChange: (value: string) => void;
+    onChange: (value: string, stats: MarkdownStats) => void;
     readOnly?: boolean;
     showToolbar?: boolean;
     enableSpellCheck?: boolean;
@@ -64,8 +71,28 @@ export interface MarkdownEditorProps {
     toolbarSize?: 'sm' | 'md' | 'lg';
 }
 
+// Hard-blocks any transaction that would grow the document's rendered text past maxLength.
+// maxLength is read from a ref (rather than closed over as a plain number) so a single plugin
+// instance, created once at editor-creation time, keeps enforcing the CURRENT maxLength even as
+// the host changes the prop later - the alternative (recreating the editor on every maxLength
+// change) would blow away undo history and cursor position.
+//
+// KNOWN LIMIT: the enforced metric is rendered text length (doc.textContent), not the length of
+// the serialized markdown string. Markdown syntax adds overhead (e.g. "**bold**" serializes to
+// more characters than the "bold" text it renders), so the persisted markdown can end up longer
+// than maxLength even though every keystroke was blocked at this boundary. Makers must set
+// maxLength below the Dataverse column's real limit, with headroom for that overhead.
+const createMaxLengthGuardPlugin = (maxLengthRef: React.MutableRefObject<number>) =>
+    $prose(() => new Plugin({
+        key: new PluginKey('markdown-editor-max-length-guard'),
+        filterTransaction: (tr) => {
+            if (!tr.docChanged) return true;
+            return tr.doc.textContent.length <= maxLengthRef.current;
+        }
+    }));
+
 const EditorComponent: React.FC<Omit<MarkdownEditorProps, 'onChange'> & {
-    onUpdate: (markdown: string) => void;
+    onUpdate: (markdown: string, stats: MarkdownStats) => void;
 }> = ({
     value,
     onUpdate,
@@ -104,8 +131,16 @@ const EditorComponent: React.FC<Omit<MarkdownEditorProps, 'onChange'> & {
     // Kept in sync via effect below so the editable() closure passed to ProseMirror at editor
     // creation time always reads the latest readOnly value, not the value from mount time.
     const readOnlyRef = useRef(readOnly);
+    // Per-instance DOM refs for the status bar spans - replaces document.getElementById, which
+    // would collide across multiple control instances on the same page sharing the same id.
+    const wordCountElRef = useRef<HTMLSpanElement | null>(null);
+    const charCountElRef = useRef<HTMLSpanElement | null>(null);
 
-    // Calculate statistics (optimized - uses refs + direct DOM updates to avoid re-renders)
+    // Calculate statistics (optimized - uses refs + direct DOM updates to avoid re-renders).
+    // `text` must be doc.textContent (rendered text), NOT the serialized markdown string - that
+    // is the single source of truth for both the word and character counts, shared by every
+    // call site (live typing preview, flush, and external value sync) so the status bar and the
+    // characterCount/wordCount outputs can never disagree.
     const updateStats = useCallback((text: string) => {
         const chars = text.length;
         const wordMatches = text.match(WORD_MATCH_REGEX);
@@ -116,11 +151,11 @@ const EditorComponent: React.FC<Omit<MarkdownEditorProps, 'onChange'> & {
         charCountRef.current = chars;
 
         // Update DOM directly for instant feedback without re-render
-        const wordEl = document.getElementById('md-word-count');
-        const charEl = document.getElementById('md-char-count');
-        if (wordEl) wordEl.textContent = `Words: ${words}`;
-        if (charEl) charEl.textContent = `Characters: ${chars} / ${maxLength}`;
-    }, [maxLength]);
+        if (wordCountElRef.current) wordCountElRef.current.textContent = `Words: ${words}`;
+        if (charCountElRef.current) charCountElRef.current.textContent = `Characters: ${chars} / ${maxLengthRef.current}`;
+
+        return { words, chars };
+    }, []);
 
     // Initialize Milkdown editor using React hooks following v7 pattern
     const { loading, get } = useEditor((root) => {
@@ -168,19 +203,9 @@ const EditorComponent: React.FC<Omit<MarkdownEditorProps, 'onChange'> & {
                                 }
                                 currentMarkdownRef.current = markdown;
 
-                                // Update stats
-                                const charCount = doc.textContent.length;
-                                const wordMatches = markdown.match(WORD_MATCH_REGEX);
-                                const words = wordMatches ? wordMatches.length : 0;
-
-                                charCountRef.current = charCount;
-                                wordCountRef.current = words;
-
-                                // Direct DOM updates (no React re-render)
-                                const wordEl = document.getElementById('md-word-count');
-                                const charEl = document.getElementById('md-char-count');
-                                if (wordEl) wordEl.textContent = `Words: ${words}`;
-                                if (charEl) charEl.textContent = `Characters: ${charCount} / ${maxLength}`;
+                                // Update stats from the rendered doc text (single source of truth),
+                                // not the serialized markdown - see updateStats' comment.
+                                updateStats(doc.textContent);
 
                                 serializeTimeoutRef.current = null;
                             } catch (error) {
@@ -192,7 +217,8 @@ const EditorComponent: React.FC<Omit<MarkdownEditorProps, 'onChange'> & {
                 .use(commonmark)
                 .use(gfm)
                 .use(history)
-                .use(listener);
+                .use(listener)
+                .use(createMaxLengthGuardPlugin(maxLengthRef));
 
             editorRef.current = editor;
             return editor;
@@ -232,47 +258,38 @@ const EditorComponent: React.FC<Omit<MarkdownEditorProps, 'onChange'> & {
     // parent. Synchronous (no setTimeout) so it is safe to call from a blur handler and from
     // unmount cleanup, where the caller needs the notify to have happened before returning.
     const flush = useCallback(() => {
-        // Re-serialize the current doc if a debounced serialize was still pending, so the
-        // notify below carries the truly latest content instead of a stale pre-debounce value.
-        // Failure here must NOT prevent the onUpdate below - losing the notify would lose the edit.
         if (serializeTimeoutRef.current) {
             clearTimeout(serializeTimeoutRef.current);
             serializeTimeoutRef.current = null;
+        }
 
-            try {
-                const editor = getEditorRef.current?.();
-                if (editor) {
-                    const view = editor.ctx.get(editorViewCtx);
-                    const serializer = editor.ctx.get(serializerCtx);
-                    if (view && serializer) {
-                        let markdown = serializer(view.state.doc);
-                        if (/^\s*$/.test(markdown)) {
-                            markdown = '';
-                        }
-                        currentMarkdownRef.current = markdown;
+        if (!isDirtyRef.current) return;
 
-                        const charCount = view.state.doc.textContent.length;
-                        const wordMatches = markdown.match(WORD_MATCH_REGEX);
-                        const words = wordMatches ? wordMatches.length : 0;
-                        charCountRef.current = charCount;
-                        wordCountRef.current = words;
-
-                        const wordEl = document.getElementById('md-word-count');
-                        const charEl = document.getElementById('md-char-count');
-                        if (wordEl) wordEl.textContent = `Words: ${words}`;
-                        if (charEl) charEl.textContent = `Characters: ${charCount} / ${maxLengthRef.current}`;
+        // Always re-serialize AND recompute stats from the current doc at flush time, rather than
+        // trusting whatever the last debounced update left behind - the notify below must carry
+        // the truly latest content and the SAME word/char numbers index.ts stores as outputs.
+        // Failure here must NOT prevent the onUpdate below - losing the notify would lose the edit.
+        try {
+            const editor = getEditorRef.current?.();
+            if (editor) {
+                const view = editor.ctx.get(editorViewCtx);
+                const serializer = editor.ctx.get(serializerCtx);
+                if (view && serializer) {
+                    let markdown = serializer(view.state.doc);
+                    if (/^\s*$/.test(markdown)) {
+                        markdown = '';
                     }
+                    currentMarkdownRef.current = markdown;
+                    updateStats(view.state.doc.textContent);
                 }
-            } catch (error) {
-                handleError(error, { component: 'MarkdownEditor', action: 'flush' });
             }
+        } catch (error) {
+            handleError(error, { component: 'MarkdownEditor', action: 'flush' });
         }
 
-        if (isDirtyRef.current) {
-            onUpdate(currentMarkdownRef.current);
-            isDirtyRef.current = false;
-        }
-    }, [onUpdate]);
+        onUpdate(currentMarkdownRef.current, { words: wordCountRef.current, chars: charCountRef.current });
+        isDirtyRef.current = false;
+    }, [onUpdate, updateStats]);
 
     // Flush on unmount so edits pending at destroy time are never lost. React runs effect
     // cleanups synchronously during root.unmount(), so this delivers onUpdate before it returns.
@@ -339,7 +356,10 @@ const EditorComponent: React.FC<Omit<MarkdownEditorProps, 'onChange'> & {
             dispatch(tr);
 
             currentMarkdownRef.current = value;
-            updateStats(value);
+            // tr.doc reflects the doc after the replaceWith step above - use its rendered text,
+            // not the raw external markdown string, to keep chars/words on the same metric as
+            // every other call site (markdown syntax length != rendered text length).
+            updateStats(tr.doc.textContent);
         } catch (error) {
             handleError(error, { component: 'MarkdownEditor', action: 'applyExternalValue' });
         }
@@ -821,9 +841,9 @@ const EditorComponent: React.FC<Omit<MarkdownEditorProps, 'onChange'> & {
             {!readOnly && (
                 <div className="markdown-status-bar">
                     <div className="status-item">
-                        <span id="md-word-count" className="status-metric">Words: {wordCountRef.current}</span>
+                        <span ref={wordCountElRef} className="status-metric">Words: {wordCountRef.current}</span>
                         <span className="status-separator">|</span>
-                        <span id="md-char-count" className="status-metric">Characters: {charCountRef.current} / {maxLength}</span>
+                        <span ref={charCountElRef} className="status-metric">Characters: {charCountRef.current} / {maxLength}</span>
                     </div>
                 </div>
             )}
