@@ -1,6 +1,6 @@
 import { useCallback } from 'react';
 import { Editor, editorViewCtx } from '@milkdown/core';
-import { callCommand } from '@milkdown/kit/utils';
+import { callCommand } from '@milkdown/utils';
 import {
     toggleStrongCommand,
     toggleEmphasisCommand,

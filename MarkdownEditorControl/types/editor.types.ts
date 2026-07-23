@@ -13,6 +13,6 @@ export interface EditorRefs {
 }
 
 export type EditorCommandExecutor = (
-    command: Parameters<typeof import('@milkdown/kit/utils').callCommand>[0],
+    command: Parameters<typeof import('@milkdown/utils').callCommand>[0],
     payload?: unknown
 ) => void;

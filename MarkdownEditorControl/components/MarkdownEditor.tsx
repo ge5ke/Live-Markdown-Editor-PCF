@@ -3,7 +3,6 @@ import { useEffect, useState, useCallback, useRef } from 'react';
 import { Milkdown, MilkdownProvider, useEditor } from '@milkdown/react';
 import { commonmark } from '@milkdown/preset-commonmark';
 import { gfm } from '@milkdown/preset-gfm';
-import { nord } from '@milkdown/theme-nord';
 import { listener, listenerCtx } from '@milkdown/plugin-listener';
 import { Editor, rootCtx, defaultValueCtx, editorViewCtx, editorViewOptionsCtx, parserCtx, serializerCtx } from '@milkdown/core';
 import { insertImageCommand } from '@milkdown/preset-commonmark';
@@ -11,7 +10,6 @@ import { history } from '@milkdown/plugin-history';
 import { clipboard } from '@milkdown/plugin-clipboard';
 import { $prose } from '@milkdown/utils';
 import { Plugin, PluginKey } from '@milkdown/prose/state';
-import '@milkdown/theme-nord/style.css';
 
 // Import security utilities
 import { validateImageSize, validateLinkUrl, validateImageUrl } from '../utils/security';
@@ -173,7 +171,6 @@ const EditorComponent: React.FC<Omit<MarkdownEditorProps, 'onChange'> & {
         try {
             const editor = Editor
                 .make()
-                .config(nord)
                 .config((ctx) => {
                     ctx.set(rootCtx, root);
                     ctx.set(defaultValueCtx, value);
