@@ -128,6 +128,15 @@ const EditorComponent: React.FC<Omit<MarkdownEditorProps, 'onChange'> & {
     // notifying. flush() compares its freshly-serialized output against this ref to decide
     // whether onUpdate is actually needed.
     const lastNotifiedRef = useRef<string>(value);
+    // True once the "establish delivery baseline" effect below has run (successfully or because
+    // it deliberately skipped - see that effect). Guards it to run its work at most once: after
+    // that, lastNotifiedRef's normalized-baseline job is done and later renders must never
+    // recompute or clobber it.
+    const baselineSetRef = useRef(false);
+    // True once flush() has actually called onUpdate at least once. Distinguishes "never touched
+    // yet" from "touched and already delivered" for the baseline effect below, since isDirtyRef
+    // alone cannot: flush() clears isDirtyRef to false in both cases.
+    const deliveredRef = useRef(false);
     // Bookkeeping only now (see flush()'s comment) - true whenever the doc has unflushed edits,
     // set synchronously on every ProseMirror update, cleared once flush() has run. flush() must
     // NOT gate on this: @milkdown/plugin-listener internally debounces the `updated` callback by
@@ -300,6 +309,7 @@ const EditorComponent: React.FC<Omit<MarkdownEditorProps, 'onChange'> & {
                     if (markdown !== lastNotifiedRef.current) {
                         onUpdate(markdown, { words: wordCountRef.current, chars: charCountRef.current });
                         lastNotifiedRef.current = markdown;
+                        deliveredRef.current = true;
                     }
                     isDirtyRef.current = false;
                     return;
@@ -316,9 +326,47 @@ const EditorComponent: React.FC<Omit<MarkdownEditorProps, 'onChange'> & {
         if (currentMarkdownRef.current !== lastNotifiedRef.current) {
             onUpdate(currentMarkdownRef.current, { words: wordCountRef.current, chars: charCountRef.current });
             lastNotifiedRef.current = currentMarkdownRef.current;
+            deliveredRef.current = true;
         }
         isDirtyRef.current = false;
     }, [onUpdate, updateStats]);
+
+    // Establish the delivery baseline once the editor is ready: lastNotifiedRef must hold the
+    // NORMALIZED (parsed-then-serialized) form of the initial doc, not the raw `value` prop as
+    // seeded above - markdown parse -> serialize is a normalizing round-trip (e.g. "* item"
+    // becomes "- item", heading/whitespace forms get canonicalized), not an identity operation.
+    // Without this, a user who merely focuses into an untouched editor and blurs back out would
+    // trigger flush() to compare a freshly (correctly) normalized serialization against the raw,
+    // un-normalized `value`, see a spurious difference, and fire an unwanted onUpdate - patching
+    // the host record with reformatted markdown despite no actual edit. Runs at most once
+    // (baselineSetRef), and only while nothing has touched the doc yet: if the user has already
+    // started editing (isDirtyRef) or a flush has already delivered (deliveredRef) by the time
+    // this runs, lastNotifiedRef already holds the right value for those cases - leave it alone.
+    // Before this effect has run (e.g. the brief window while the editor is still loading), flush
+    // still compares against the raw initial `value` string - a pre-existing, documented, narrow
+    // window that a user cannot realistically hit (no doc exists yet to focus into or blur from).
+    useEffect(() => {
+        if (baselineSetRef.current) return;
+        if (isDirtyRef.current || deliveredRef.current) return;
+
+        const editor = get?.();
+        if (!editor) return;
+
+        try {
+            const view = editor.ctx.get(editorViewCtx);
+            const serializer = editor.ctx.get(serializerCtx);
+            if (!view || !serializer) return;
+
+            let markdown = serializer(view.state.doc);
+            if (/^\s*$/.test(markdown)) {
+                markdown = '';
+            }
+            lastNotifiedRef.current = markdown;
+            baselineSetRef.current = true;
+        } catch (error) {
+            handleError(error, { component: 'MarkdownEditor', action: 'establishBaseline' });
+        }
+    }, [get]);
 
     // Toggle ProseMirror-level editability at runtime (e.g. the host form flips
     // isControlDisabled). Updates the ref the editable() closure above reads, then forces the
@@ -448,12 +496,30 @@ const EditorComponent: React.FC<Omit<MarkdownEditorProps, 'onChange'> & {
 
             currentMarkdownRef.current = value;
             // The host already owns this value (it is the very value we just applied), so it is
-            // also, by definition, the last value the host was notified of - record it here too.
-            // This makes the listener's late debounced callback (see comment below) fully
-            // harmless: a later flush() re-serializes identical content, compares equal against
-            // lastNotifiedRef, and correctly skips onUpdate instead of bouncing the host's own
-            // value back to it.
-            lastNotifiedRef.current = value;
+            // also, by definition, the last value the host was notified of - record it here too,
+            // so that a later flush() finds nothing new to report and correctly skips onUpdate
+            // instead of bouncing the host's own value back to it. Deliberately re-serialize
+            // tr.doc here rather than reusing the raw `value` string: markdown parse -> serialize
+            // is a normalizing round-trip (e.g. "* item" -> "- item"), not an identity operation,
+            // so the doc we just built from `value` may not serialize back to `value` verbatim.
+            // lastNotifiedRef must hold what a later flush() will ACTUALLY produce from this doc,
+            // or that later flush would see a spurious (correctly-normalized) difference and fire
+            // an unwanted onUpdate despite no user edit having happened.
+            try {
+                const serializer = editor.ctx.get(serializerCtx);
+                let normalized = serializer(tr.doc);
+                if (/^\s*$/.test(normalized)) {
+                    normalized = '';
+                }
+                lastNotifiedRef.current = normalized;
+                baselineSetRef.current = true;
+            } catch (serializeError) {
+                // Fall back to the raw value - not exactly what flush() would produce, but still
+                // far closer than leaving the pre-apply baseline in place, and the error is
+                // surfaced either way.
+                lastNotifiedRef.current = value;
+                handleError(serializeError, { component: 'MarkdownEditor', action: 'applyExternalValue' });
+            }
             // tr.doc reflects the doc after the replaceWith step above - use its rendered text,
             // not the raw external markdown string, to keep chars/words on the same metric as
             // every other call site (markdown syntax length != rendered text length).
