@@ -251,45 +251,13 @@ const EditorComponent: React.FC<Omit<MarkdownEditorProps, 'onChange'> & {
     // Stable getEditor function for hooks
     const getEditor = useCallback(() => get?.(), [get]);
 
-    // Toggle ProseMirror-level editability at runtime (e.g. the host form flips
-    // isControlDisabled). Updates the ref the editable() closure above reads, then forces the
-    // live view to re-read its props - editable is a function, so ProseMirror re-invokes it on
-    // relevant checks, but setProps is what makes it pick up a *changed* closure result now.
-    useEffect(() => {
-        readOnlyRef.current = readOnly;
-
-        const editor = get?.();
-        if (!editor) return;
-
-        try {
-            const view = editor.ctx.get(editorViewCtx);
-            view?.setProps({ editable: () => !readOnlyRef.current });
-        } catch (error) {
-            handleError(error, { component: 'MarkdownEditor', action: 'applyReadOnly' });
-        }
-    }, [readOnly, get]);
-
-    // Apply spellcheck changes to the live view the same way readOnly is applied above.
-    useEffect(() => {
-        const editor = get?.();
-        if (!editor) return;
-
-        try {
-            const view = editor.ctx.get(editorViewCtx);
-            view?.setProps({
-                attributes: {
-                    spellcheck: String(enableSpellCheck),
-                    'aria-label': 'Markdown editor'
-                }
-            });
-        } catch (error) {
-            handleError(error, { component: 'MarkdownEditor', action: 'applySpellCheck' });
-        }
-    }, [enableSpellCheck, get]);
-
     // Flush any pending debounced serialize and, if the doc has unflushed edits, notify the
     // parent. Synchronous (no setTimeout) so it is safe to call from a blur handler and from
     // unmount cleanup, where the caller needs the notify to have happened before returning.
+    // Declared above the readOnly-toggle effect below (rather than near the unmount-flush effect
+    // further down) because that effect must call it too - flush()'s own identity depends only
+    // on onUpdate (updateStats' identity is stable, deps []), so it does not churn across
+    // unrelated re-renders.
     const flush = useCallback(() => {
         if (serializeTimeoutRef.current) {
             clearTimeout(serializeTimeoutRef.current);
@@ -324,8 +292,62 @@ const EditorComponent: React.FC<Omit<MarkdownEditorProps, 'onChange'> & {
         isDirtyRef.current = false;
     }, [onUpdate, updateStats]);
 
+    // Toggle ProseMirror-level editability at runtime (e.g. the host form flips
+    // isControlDisabled). Updates the ref the editable() closure above reads, then forces the
+    // live view to re-read its props - editable is a function, so ProseMirror re-invokes it on
+    // relevant checks, but setProps is what makes it pick up a *changed* closure result now.
+    useEffect(() => {
+        readOnlyRef.current = readOnly;
+
+        const editor = get?.();
+        if (!editor) return;
+
+        try {
+            // Flush BEFORE disabling editability. Once readOnly is true, this same render's
+            // effect cleanup tears down the focusout listener (see the flush-on-focusout effect
+            // below, which bails out entirely when readOnly), and the only remaining flush
+            // trigger is unmount - so any edit still unflushed at this instant would otherwise
+            // sit silently discarded until (and unless) the component unmounts. flush() is a
+            // no-op when there is nothing dirty, so this is safe to call on every readOnly
+            // transition, not just true->false.
+            if (readOnly) {
+                flush();
+            }
+
+            const view = editor.ctx.get(editorViewCtx);
+            view?.setProps({ editable: () => !readOnlyRef.current });
+        } catch (error) {
+            handleError(error, { component: 'MarkdownEditor', action: 'applyReadOnly' });
+        }
+    }, [readOnly, get, flush]);
+
+    // Apply spellcheck changes to the live view the same way readOnly is applied above.
+    useEffect(() => {
+        const editor = get?.();
+        if (!editor) return;
+
+        try {
+            const view = editor.ctx.get(editorViewCtx);
+            view?.setProps({
+                attributes: {
+                    spellcheck: String(enableSpellCheck),
+                    'aria-label': 'Markdown editor'
+                }
+            });
+        } catch (error) {
+            handleError(error, { component: 'MarkdownEditor', action: 'applySpellCheck' });
+        }
+    }, [enableSpellCheck, get]);
+
     // Flush on unmount so edits pending at destroy time are never lost. React runs effect
     // cleanups synchronously during root.unmount(), so this delivers onUpdate before it returns.
+    // Invariant this depends on: @milkdown/react's own cleanup calls editor.destroy() as a
+    // fire-and-forget async call (it does not await it, and React does not wait for it either),
+    // so the editor ctx (view/serializer, read inside flush() via getEditorRef) is still valid
+    // synchronously here, before destroy() has had a chance to tear anything down. Verified
+    // against the vendored source in node_modules/@milkdown/react/lib/index.js (useGetEditor's
+    // cleanup: `() => { editor.destroy().catch(console.error); }`), @milkdown/react +
+    // @milkdown/core 7.20.0.
     useEffect(() => {
         return () => {
             flush();
@@ -385,6 +407,14 @@ const EditorComponent: React.FC<Omit<MarkdownEditorProps, 'onChange'> & {
             const parsedDoc = parser(value) ?? state.schema.topNodeType.createAndFill();
             if (!parsedDoc) return;
 
+            // Cancel any pending debounced serialize before replacing the doc below - the doc it
+            // would have serialized is about to be replaced wholesale, so letting it fire later
+            // would clobber currentMarkdownRef with a stale, pre-external-apply serialization.
+            if (serializeTimeoutRef.current) {
+                clearTimeout(serializeTimeoutRef.current);
+                serializeTimeoutRef.current = null;
+            }
+
             const tr = state.tr.replaceWith(0, state.doc.content.size, parsedDoc.content);
             dispatch(tr);
 
@@ -393,6 +423,18 @@ const EditorComponent: React.FC<Omit<MarkdownEditorProps, 'onChange'> & {
             // not the raw external markdown string, to keep chars/words on the same metric as
             // every other call site (markdown syntax length != rendered text length).
             updateStats(tr.doc.textContent);
+            // The dispatch above re-enters @milkdown/plugin-listener's own internal ~200ms
+            // debounce (see its `apply`/`debouncedHandler`), which will eventually invoke our
+            // `updated` listener registered in the useEditor factory and set isDirtyRef.current =
+            // true for this transaction - even though it originated from the host `value` prop,
+            // not the user. A synchronous set/clear guard around dispatch() cannot suppress that,
+            // because the listener plugin's own debounce means `updated` fires asynchronously,
+            // well after any synchronous guard here would already have been reset. So instead:
+            // currentMarkdownRef was just set to `value` above, meaning the editor now exactly
+            // mirrors the host value with nothing pending - reset isDirtyRef here so a later
+            // readOnly-toggle flush or unmount-flush does not deliver this host-originated
+            // content back to the host as if it were a user edit.
+            isDirtyRef.current = false;
         } catch (error) {
             handleError(error, { component: 'MarkdownEditor', action: 'applyExternalValue' });
         }
@@ -504,11 +546,13 @@ const EditorComponent: React.FC<Omit<MarkdownEditorProps, 'onChange'> & {
             src: validation.sanitized,
             alt: imageAlt.trim() || 'image'
         });
-        // executeCommand already refocuses the view, but do so explicitly too since insertion
-        // itself may fail silently (e.g. no image node at schema) and popover close should not
-        // depend on that.
+        // executeCommand already refocuses the view, but do so explicitly too (matching
+        // handleInsertLink above) since insertion itself may fail silently (e.g. no image node
+        // at schema) and popover close should not depend on that.
+        const editor = getEditor();
+        editor?.ctx.get(editorViewCtx)?.focus();
         setActivePopover(null);
-    }, [executeCommand, imageUrl, imageAlt]);
+    }, [executeCommand, getEditor, imageUrl, imageAlt]);
 
     const copyToClipboard = async () => {
         try {
