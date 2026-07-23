@@ -114,6 +114,23 @@
     position: relative;
 }
 
+/* Structural corner rounding: whichever section happens to be first/last in the DOM gets the
+   matching corners, instead of hard-coding radius onto specific sections. This means read-only
+   mode (wrapper is the ONLY child) rounds all four corners on the wrapper automatically, and
+   edit mode (toolbar first, wrapper middle, status bar last) rounds only the outer sections -
+   no per-composition CSS needed. A border-radius clips an element's OWN background by itself
+   (no overflow: hidden required), so the table dropdown and popovers - which escape their
+   ancestors via position: absolute - are never clipped. */
+.markdown-editor-container > :first-child {
+    border-top-left-radius: var(--fluent-radius-large);
+    border-top-right-radius: var(--fluent-radius-large);
+}
+
+.markdown-editor-container > :last-child {
+    border-bottom-left-radius: var(--fluent-radius-large);
+    border-bottom-right-radius: var(--fluent-radius-large);
+}
+
 /* ========================================
    TOOLBAR - FLUENT 2.0
    ======================================== */
@@ -124,7 +141,6 @@
     padding: var(--fluent-spacing-s) var(--fluent-spacing-m);
     background: var(--fluent-gradient-toolbar);
     border-bottom: 1px solid var(--fluent-border-default);
-    border-radius: var(--fluent-radius-large) var(--fluent-radius-large) 0 0; /* 8px top corners */
     flex-wrap: wrap;
     position: relative;
     z-index: 100;
@@ -188,11 +204,6 @@
     height: 20px;
     /* Crisp SVG rendering */
     shape-rendering: geometricPrecision;
-}
-
-.toolbar-button-label {
-    font-size: var(--fluent-font-size-200);
-    font-weight: var(--fluent-font-weight-semibold);
 }
 
 .toolbar-button:hover {
@@ -271,16 +282,32 @@
 /* ========================================
    EDITOR AREA - FLUENT 2.0
    ======================================== */
+/* Click-to-interact scroll: the wrapper does not capture the page's scroll wheel until the
+   user has actually focused into the editor (no overscroll-behavior: contain, no
+   scroll-behavior: smooth - both would fight the page's own scrolling). Default overflow-y:
+   hidden lets an unfocused editor's own content simply clip rather than eat scroll events that
+   were meant for the page; overflow-y: auto is restored the moment the container gains focus,
+   via :focus-within below. scrollbar-gutter: stable reserves the scrollbar's width up front so
+   toggling into overflow-y: auto never shifts the layout. */
 .markdown-editor-wrapper {
     flex: 1;
-    overflow-y: auto;
+    overflow-y: hidden;
     overflow-x: hidden;
+    scrollbar-gutter: stable;
     padding: var(--fluent-spacing-l) var(--fluent-spacing-xl);
     background-color: var(--fluent-bg-primary);
-    scroll-behavior: smooth;
-    overscroll-behavior: contain;
     position: relative;
     z-index: 1;
+}
+
+.markdown-editor-container:focus-within .markdown-editor-wrapper {
+    overflow-y: auto;
+}
+
+/* Read-only is a pure renderer with no toolbar/status bar affordances to signal "click to
+   scroll" - always allow scrolling so long content is never hidden with no way to reach it. */
+.markdown-editor-container.read-only .markdown-editor-wrapper {
+    overflow-y: auto;
 }
 
 .milkdown-editor {
@@ -513,7 +540,6 @@
     /* backdrop-filter removed for performance */
 
     border-top: 1px solid var(--fluent-border-default);
-    border-radius: 0 0 var(--fluent-radius-large) var(--fluent-radius-large); /* 8px bottom corners */
     font-size: var(--fluent-font-size-200);
     color: var(--fluent-fg-secondary);
     min-height: 36px;
@@ -525,20 +551,6 @@
     gap: var(--fluent-spacing-s);
 }
 
-.status-icon {
-    width: 16px;
-    height: 16px;
-    display: flex;
-    align-items: center;
-    justify-content: center;
-}
-
-.status-icon svg {
-    width: 16px;
-    height: 16px;
-    shape-rendering: geometricPrecision;
-}
-
 .status-metric {
     font-variant-numeric: tabular-nums;
 }
@@ -548,21 +560,7 @@
     margin: 0 var(--fluent-spacing-xxs);
 }
 
-.status-readonly {
-    background-color: var(--fluent-bg-tertiary);
-    padding: var(--fluent-spacing-xxs) var(--fluent-spacing-s);
-    border-radius: var(--fluent-radius-small);
-    font-weight: var(--fluent-font-weight-medium);
-    text-transform: uppercase;
-    font-size: var(--fluent-font-size-100);
-    letter-spacing: 0.3px;
-}
-
 /* Read-only mode */
-.markdown-editor-container.read-only .markdown-toolbar {
-    display: none;
-}
-
 .markdown-editor-container.read-only .milkdown .editor {
     cursor: default;
 }
@@ -586,8 +584,9 @@
     margin: 16px;
 }
 
-/* Accessibility improvements */
-.milkdown .editor:focus {
+/* Accessibility improvements - :focus-visible so the ring only shows for keyboard focus,
+   not on every mouse click into the editor (table-cell selection outlines are unaffected). */
+.milkdown .editor:focus-visible {
     outline: 2px solid var(--fluent-brand-primary);
     outline-offset: 4px;
 }
@@ -701,10 +700,6 @@
     height: 1px;
     margin: var(--fluent-spacing-xs) 0;
     background-color: var(--fluent-border-subtle);
-}
-
-.dropdown-category {
-    margin: 0;
 }
 
 /* ========================================
@@ -1013,10 +1008,6 @@
 
 /* Reduced motion support for accessibility */
 @media (prefers-reduced-motion: reduce) {
-    .markdown-editor-wrapper {
-        scroll-behavior: auto;
-    }
-
     .toolbar-button,
     .dropdown-item,
     .toolbar-dropdown {
