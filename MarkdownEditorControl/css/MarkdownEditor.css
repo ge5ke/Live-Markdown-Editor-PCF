@@ -587,14 +587,14 @@ img.ProseMirror-separator { display: inline !important; border: none !important;
     display: flex;
     align-items: center;
     justify-content: space-between;
-    padding: var(--fluent-spacing-xs) var(--fluent-spacing-m);
+    padding: 1px var(--fluent-spacing-m);
     background: var(--fluent-gradient-toolbar);
     /* backdrop-filter removed for performance */
 
     border-top: 1px solid var(--fluent-border-default);
-    font-size: var(--fluent-font-size-200);
+    font-size: 11px;
     color: var(--fluent-fg-secondary);
-    min-height: 36px;
+    min-height: 22px;
 }
 
 .status-item {
