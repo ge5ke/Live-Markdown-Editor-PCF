@@ -19,7 +19,6 @@ A feature-rich Markdown editor built as a Power Apps Component Framework (PCF) c
 
 ### Fluent 2.0 Design (New in v1.5.0)
 - **Lucide Icons**: Crisp, modern SVG icons throughout the interface
-- **Glassmorphism Effects**: Subtle backdrop blur on toolbar and dropdowns
 - **Enhanced Shadows**: Multi-layered shadows for depth and elevation
 - **Gradient Accents**: Subtle gradients on active buttons and toolbars
 - **Smooth Animations**: 150ms transitions for polished interactions
@@ -77,7 +76,7 @@ A feature-rich Markdown editor built as a Power Apps Component Framework (PCF) c
 
 1. **Clone the repository**
    ```bash
-   git clone https://github.com/Sahib-Sawhney-WH/Live-Markdown-Editor-PCF.git
+   git clone <your repository URL>
    cd markdown_editor
    ```
 
@@ -354,7 +353,7 @@ MIT License - see LICENSE file for details
 ## Support
 
 For issues, questions, or contributions:
-- Open an issue on [GitHub](https://github.com/Sahib-Sawhney-WH/Live-Markdown-Editor-PCF/issues)
+- Contact your internal maintainer
 - Check existing issues for solutions
 - Review the documentation for detailed guides
 
