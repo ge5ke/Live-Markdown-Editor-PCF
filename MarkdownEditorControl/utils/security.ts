@@ -21,10 +21,19 @@ export interface ValidationResult {
 // and never leaks into a returned value.
 const RELATIVE_URL_BASE = 'https://placeholder.invalid';
 
-// ASCII control characters (0x00-0x1F, 0x7F) plus the whitespace characters browsers silently
-// strip from a URL before navigating to it. Stripping these BEFORE classification/parsing is
-// what closes the bypass: a naive substring check like url.startsWith('javascript:') is easily
-// defeated by an embedded control character the browser removes later but the check never saw.
+// Only the whitespace characters browsers silently strip from *anywhere* in a URL before
+// navigating to it: tab, LF, CR. (Leading/trailing whitespace of any kind, including plain
+// spaces, is handled separately by .trim() below - browsers strip that too, but only at the
+// ends.) Stripping these BEFORE classification/parsing is what closes the scheme-splitting
+// bypass: a naive substring check like url.startsWith('javascript:') is easily defeated by an
+// embedded tab/newline/CR the browser removes later but the check never saw.
+//
+// Deliberately narrower than "all of 0x00-0x1F, 0x7F": an *interior* plain space or other
+// control character is not silently stripped by browsers the way tab/LF/CR are, so silently
+// stripping it here would silently alter an otherwise-legitimate URL (e.g. a data: URL or a
+// path segment that intentionally contains one) rather than matching real browser behavior.
+// Those are handled below instead: interior control characters other than tab/LF/CR make the
+// candidate invalid and the URL is rejected outright, never silently rewritten.
 //
 // Attack shapes this closes:
 //   - "java\tscript:alert(1)"  - tab (0x09) splits the scheme keyword past a naive prefix check;
@@ -39,8 +48,13 @@ const RELATIVE_URL_BASE = 'https://placeholder.invalid';
 //                                only ever inherit a real network scheme (http/https) from
 //                                whatever page it is used on, never javascript:, so treating it
 //                                as relative-and-safe here is correct.
+const STRIPPED_WHITESPACE_REGEX = /[\t\n\r]/g;
+
+// Any remaining ASCII control character (0x00-0x1F minus tab/LF/CR, plus 0x7F/DEL) after the
+// strip above is treated as an invalid URL rather than silently removed - see
+// STRIPPED_WHITESPACE_REGEX's comment for why silent stripping is wrong for these.
 // eslint-disable-next-line no-control-regex -- matching control characters is the intent here
-const CONTROL_AND_WHITESPACE_REGEX = /[\x00-\x20\x7F]/g;
+const INTERIOR_CONTROL_CHAR_REGEX = /[\x00-\x08\x0B\x0C\x0E-\x1F\x7F]/;
 
 interface ParsedCandidate {
     parsed: URL;
@@ -67,7 +81,7 @@ function parseUrlCandidate(candidate: string): ParsedCandidate | null {
 /**
  * Validates a URL for use in links.
  * Allows http, https, mailto, tel, ftp (SAFE_LINK_PROTOCOLS) and relative URLs.
- * See CONTROL_AND_WHITESPACE_REGEX above for the attack shapes this specifically closes.
+ * See STRIPPED_WHITESPACE_REGEX above for the attack shapes this specifically closes.
  */
 export function validateLinkUrl(url: string): ValidationResult {
     if (!url || typeof url !== 'string') {
@@ -80,10 +94,17 @@ export function validateLinkUrl(url: string): ValidationResult {
     }
 
     // Candidate is the value actually classified AND returned as `sanitized` - never the raw
-    // (control-char-containing) input.
-    const candidate = trimmed.replace(CONTROL_AND_WHITESPACE_REGEX, '');
+    // (tab/newline/CR-containing) input. Interior plain spaces are deliberately left as-is here -
+    // see STRIPPED_WHITESPACE_REGEX's comment.
+    const candidate = trimmed.replace(STRIPPED_WHITESPACE_REGEX, '');
     if (candidate === '') {
         return { valid: false, error: 'URL cannot be empty' };
+    }
+
+    // Any other interior control character is rejected outright rather than silently stripped -
+    // see INTERIOR_CONTROL_CHAR_REGEX's comment.
+    if (INTERIOR_CONTROL_CHAR_REGEX.test(candidate)) {
+        return { valid: false, error: 'URL contains invalid control characters' };
     }
 
     const result = parseUrlCandidate(candidate);
@@ -123,9 +144,15 @@ export function validateImageUrl(url: string): ValidationResult {
         return { valid: false, error: 'Image URL cannot be empty' };
     }
 
-    const candidate = trimmed.replace(CONTROL_AND_WHITESPACE_REGEX, '');
+    // See validateLinkUrl above for why only tab/LF/CR are stripped here (interior plain spaces
+    // are left as-is) and why remaining interior control characters are rejected, not stripped.
+    const candidate = trimmed.replace(STRIPPED_WHITESPACE_REGEX, '');
     if (candidate === '') {
         return { valid: false, error: 'Image URL cannot be empty' };
+    }
+
+    if (INTERIOR_CONTROL_CHAR_REGEX.test(candidate)) {
+        return { valid: false, error: 'Image URL contains invalid control characters' };
     }
 
     const result = parseUrlCandidate(candidate);

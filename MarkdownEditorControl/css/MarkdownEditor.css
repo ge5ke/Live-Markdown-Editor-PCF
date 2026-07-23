@@ -1,7 +1,13 @@
 /* ========================================
    FLUENT 2.0 DESIGN TOKENS
+   Scoped to .markdown-editor-container (NOT :root) - a PCF control's CSS is injected into the
+   host page's <head> and applies to the WHOLE model-driven form, so a :root block would leak
+   ~60 custom properties as globals onto every other control/web-resource on the page. Every
+   piece of this control's markup renders inside .markdown-editor-container (see
+   MarkdownEditor.tsx's JSX root), so scoping the tokens there costs nothing - custom properties
+   inherit down through the whole subtree exactly like :root would, just without escaping it.
    ======================================== */
-:root {
+.markdown-editor-container {
     /* === Color Tokens === */
     /* Brand colors - vibrant blues */
     --fluent-brand-primary: #0078d4;
@@ -297,7 +303,7 @@
 .milkdown .ProseMirror [contenteditable="false"] [contenteditable="true"] { white-space: pre-wrap; }
 .milkdown .ProseMirror-hideselection * { caret-color: transparent; }
 .milkdown .ProseMirror-selectednode { outline: 2px solid var(--fluent-brand-primary); }
-img.ProseMirror-separator { display: inline !important; border: none !important; margin: 0 !important; }
+.milkdown img.ProseMirror-separator { display: inline !important; border: none !important; margin: 0 !important; }
 .milkdown .ProseMirror-gapcursor { display: none; pointer-events: none; position: absolute; }
 .milkdown .ProseMirror-gapcursor:after { content: ""; display: block; position: absolute; top: -2px; width: 20px; border-top: 1px solid currentColor; animation: ProseMirror-cursor-blink 1.1s steps(2, start) infinite; }
 @keyframes ProseMirror-cursor-blink { to { visibility: hidden; } }
@@ -391,8 +397,10 @@ img.ProseMirror-separator { display: inline !important; border: none !important;
     text-align: left;
 }
 
-/* Override any ProseMirror default centering */
-.ProseMirror {
+/* Override any ProseMirror default centering. Scoped to .milkdown (not bare .ProseMirror) -
+   the unscoped selector would style ANY ProseMirror-based editor elsewhere on the host page,
+   not just this control's own. */
+.milkdown .ProseMirror {
     margin: 0 !important;
     max-width: 100% !important;
     text-align: left !important;

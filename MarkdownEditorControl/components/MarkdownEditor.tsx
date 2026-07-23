@@ -53,6 +53,14 @@ import {
 // Module-level regex constants (compiled once)
 const WORD_MATCH_REGEX = /\S+/g;
 
+// A document that has been fully cleared, or that contains only whitespace, can serialize to
+// something other than the empty string (e.g. a lone newline), depending on the serializer -
+// normalize so "empty" is always exactly "". Shared by every call site that produces a markdown
+// string destined to be compared against another normalized markdown string (the debounced
+// serialize, flush(), the delivery-baseline effect, and the external-apply effect below), so two
+// serializations of "nothing" always compare equal instead of only some of them.
+const normalizeMarkdown = (markdown: string): string => (/^\s*$/.test(markdown) ? '' : markdown);
+
 export interface MarkdownStats {
     words: number;
     chars: number;
@@ -81,10 +89,20 @@ export interface MarkdownEditorProps {
 // more characters than the "bold" text it renders), so the persisted markdown can end up longer
 // than maxLength even though every keystroke was blocked at this boundary. Makers must set
 // maxLength below the Dataverse column's real limit, with headroom for that overhead.
+//
+// That same overhead means a bound `value` LONGER than maxLength arriving from the host is a
+// legitimate case, not a bug - and this guard must never block it. Applying it would have been
+// silently catastrophic: applyExternalValue's caller would still update currentMarkdownRef/
+// lastNotifiedRef/stats as if the doc-replace succeeded, so a later flush would re-serialize the
+// unchanged (stale) doc, see a spurious diff against lastNotifiedRef, and hand the host back its
+// own stale/empty content as if it were a real edit. applyExternalValue tags its transaction with
+// the 'externalApply' meta specifically so this plugin can tell "host-originated, authoritative"
+// apart from "user keystroke, enforce the limit" and let the former through unconditionally.
 const createMaxLengthGuardPlugin = (maxLengthRef: React.MutableRefObject<number>) =>
     $prose(() => new Plugin({
         key: new PluginKey('markdown-editor-max-length-guard'),
         filterTransaction: (tr) => {
+            if (tr.getMeta('externalApply')) return true;
             if (!tr.docChanged) return true;
             return tr.doc.textContent.length <= maxLengthRef.current;
         }
@@ -231,12 +249,7 @@ const EditorComponent: React.FC<Omit<MarkdownEditorProps, 'onChange'> & {
                             try {
                                 // Serialize to markdown
                                 const serializer = ctx.get(serializerCtx);
-                                let markdown = serializer(doc);
-                                // An emptied document can serialize to whitespace (e.g. a lone newline)
-                                // rather than "" - normalize so clearing the field yields a true empty output.
-                                if (/^\s*$/.test(markdown)) {
-                                    markdown = '';
-                                }
+                                const markdown = normalizeMarkdown(serializer(doc));
                                 currentMarkdownRef.current = markdown;
 
                                 // Update stats from the rendered doc text (single source of truth),
@@ -308,10 +321,7 @@ const EditorComponent: React.FC<Omit<MarkdownEditorProps, 'onChange'> & {
                 const view = editor.ctx.get(editorViewCtx);
                 const serializer = editor.ctx.get(serializerCtx);
                 if (view && serializer) {
-                    let markdown = serializer(view.state.doc);
-                    if (/^\s*$/.test(markdown)) {
-                        markdown = '';
-                    }
+                    const markdown = normalizeMarkdown(serializer(view.state.doc));
                     currentMarkdownRef.current = markdown;
                     updateStats(view.state.doc.textContent);
 
@@ -379,10 +389,7 @@ const EditorComponent: React.FC<Omit<MarkdownEditorProps, 'onChange'> & {
             const parsedDoc = parser(initialValueRef.current);
             if (!parsedDoc) return;
 
-            let markdown = serializer(parsedDoc);
-            if (/^\s*$/.test(markdown)) {
-                markdown = '';
-            }
+            const markdown = normalizeMarkdown(serializer(parsedDoc));
             lastNotifiedRef.current = markdown;
 
             // currentMarkdownRef's semantic is "serialization of the CURRENT doc" - for a doc
@@ -415,6 +422,12 @@ const EditorComponent: React.FC<Omit<MarkdownEditorProps, 'onChange'> & {
         const editor = get?.();
         if (!editor) return;
 
+        // setProps (which actually flips ProseMirror-level editability) must run whether or not
+        // flush() above succeeds - a throw during flush must not leave the view editable when
+        // readOnly just became true (or vice versa). try/finally, rather than a single try/catch
+        // that falls through, guarantees that: the finally block runs unconditionally, even if
+        // the try block throws and even though flush() and setProps use independent try/catches
+        // of their own so a failure in either is reported without skipping the other.
         try {
             // Flush BEFORE disabling editability. Once readOnly is true, this same render's
             // effect cleanup tears down the focusout listener (see the flush-on-focusout effect
@@ -426,11 +439,15 @@ const EditorComponent: React.FC<Omit<MarkdownEditorProps, 'onChange'> & {
             if (readOnly) {
                 flush();
             }
-
-            const view = editor.ctx.get(editorViewCtx);
-            view?.setProps({ editable: () => !readOnlyRef.current });
         } catch (error) {
             handleError(error, { component: 'MarkdownEditor', action: 'applyReadOnly' });
+        } finally {
+            try {
+                const view = editor.ctx.get(editorViewCtx);
+                view?.setProps({ editable: () => !readOnlyRef.current });
+            } catch (error) {
+                handleError(error, { component: 'MarkdownEditor', action: 'applyReadOnly' });
+            }
         }
     }, [readOnly, get, flush]);
 
@@ -503,7 +520,6 @@ const EditorComponent: React.FC<Omit<MarkdownEditorProps, 'onChange'> & {
     // flush overwrites it. Replaces the old "sync when empty" effect, which could resurrect
     // deleted content because it only ever looked at whether the editor was empty.
     useEffect(() => {
-        if (isDirtyRef.current) return;
         if (value === currentMarkdownRef.current) return;
 
         const editor = get?.();
@@ -512,7 +528,23 @@ const EditorComponent: React.FC<Omit<MarkdownEditorProps, 'onChange'> & {
         try {
             const view = editor.ctx.get(editorViewCtx);
             const parser = editor.ctx.get(parserCtx);
-            if (!view || !parser) return;
+            const serializer = editor.ctx.get(serializerCtx);
+            if (!view || !parser || !serializer) return;
+
+            // isDirtyRef.current is deliberately NOT used as this effect's dirtiness gate, even
+            // though its name suggests it should be. Per its own declaration comment,
+            // @milkdown/plugin-listener internally debounces its `updated` callback by ~200ms, so
+            // isDirtyRef can still read stale: true right after a flush already delivered
+            // everything (nothing is actually pending), or re-marked true by that same late
+            // callback firing AFTER a previous run of this very effect reset it to false. Either
+            // way, a gate on isDirtyRef would incorrectly treat the editor as dirty and silently
+            // drop the SECOND of two consecutive external updates. Instead, ask the live doc
+            // directly - serialize it and compare against lastNotifiedRef (what the host actually
+            // has), the exact same check flush() itself uses to decide whether there is anything
+            // real to report. Only a genuine, currently-live, unflushed local edit blocks the
+            // apply; serializing here is fine cost-wise since external updates are rare.
+            const actuallyDirty = normalizeMarkdown(serializer(view.state.doc)) !== lastNotifiedRef.current;
+            if (actuallyDirty) return;
 
             const { state, dispatch } = view;
             // parser("") still yields a doc (an empty paragraph); the fallback below only
@@ -529,7 +561,30 @@ const EditorComponent: React.FC<Omit<MarkdownEditorProps, 'onChange'> & {
             }
 
             const tr = state.tr.replaceWith(0, state.doc.content.size, parsedDoc.content);
+            // Tags this transaction so the maxLength guard plugin (see its own comment) passes
+            // it through unconditionally, even when `value` is longer than maxLength - a
+            // legitimate case (markdown-syntax overhead; see maxLength's doc comment), not an
+            // attack. Without this, the guard would silently filter the transaction while the
+            // code below still updated currentMarkdownRef/lastNotifiedRef/stats as if it had
+            // applied - the exact stale-overwrite bug this tag exists to close.
+            tr.setMeta('externalApply', true);
             dispatch(tr);
+
+            // Verify the transaction actually landed on the view before trusting it below, rather
+            // than assuming the meta above was honored. Under normal operation this always
+            // succeeds, but re-checking independently means a future change to the guard plugin,
+            // or any other filterTransaction plugin added later, can never leave
+            // currentMarkdownRef/lastNotifiedRef claiming a doc the view does not actually hold -
+            // which would otherwise cause a later flush() to re-serialize the real (unchanged,
+            // stale) doc, see a spurious diff against the just-updated lastNotifiedRef, and fire
+            // onUpdate with stale/empty content, silently overwriting the host's own data.
+            if (!view.state.doc.eq(parsedDoc)) {
+                handleError(
+                    new Error('External value application was rejected by the editor and not applied to the document'),
+                    { component: 'MarkdownEditor', action: 'applyExternalValue' }
+                );
+                return;
+            }
 
             currentMarkdownRef.current = value;
             // The host already owns this value (it is the very value we just applied), so it is
@@ -543,12 +598,7 @@ const EditorComponent: React.FC<Omit<MarkdownEditorProps, 'onChange'> & {
             // or that later flush would see a spurious (correctly-normalized) difference and fire
             // an unwanted onUpdate despite no user edit having happened.
             try {
-                const serializer = editor.ctx.get(serializerCtx);
-                let normalized = serializer(tr.doc);
-                if (/^\s*$/.test(normalized)) {
-                    normalized = '';
-                }
-                lastNotifiedRef.current = normalized;
+                lastNotifiedRef.current = normalizeMarkdown(serializer(tr.doc));
                 baselineSetRef.current = true;
             } catch (serializeError) {
                 // Fall back to the raw value - not exactly what flush() would produce, but still
@@ -572,8 +622,9 @@ const EditorComponent: React.FC<Omit<MarkdownEditorProps, 'onChange'> & {
             // mirrors the host value with nothing pending - reset isDirtyRef here so a later
             // readOnly-toggle flush or unmount-flush does not deliver this host-originated
             // content back to the host as if it were a user edit. Even if isDirtyRef does get
-            // re-marked true by that late callback, flush() no longer trusts it either way (see
-            // flush()'s own comment) - it will just re-serialize and find nothing changed.
+            // re-marked true by that late callback, neither flush() nor this effect's own
+            // dirtiness check above trusts it either way - both re-serialize and compare against
+            // lastNotifiedRef, which now already matches, so they correctly find nothing changed.
             isDirtyRef.current = false;
         } catch (error) {
             handleError(error, { component: 'MarkdownEditor', action: 'applyExternalValue' });

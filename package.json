@@ -20,6 +20,7 @@
   ],
   "scripts": {
     "build": "pcf-scripts build",
+    "build:prod": "pcf-scripts build --buildMode production",
     "clean": "pcf-scripts clean",
     "lint": "pcf-scripts lint",
     "lint:fix": "pcf-scripts lint fix",

@@ -18,7 +18,7 @@ A feature-rich Markdown editor built as a Power Apps Component Framework (PCF) c
 - **Live Rendering**: Content is formatted in real-time as you type
 
 ### Fluent 2.0 Design (New in v1.5.0)
-- **Fluent UI Icons**: Crisp, modern SVG icons throughout the interface
+- **Lucide Icons**: Crisp, modern SVG icons throughout the interface
 - **Glassmorphism Effects**: Subtle backdrop blur on toolbar and dropdowns
 - **Enhanced Shadows**: Multi-layered shadows for depth and elevation
 - **Gradient Accents**: Subtle gradients on active buttons and toolbars
@@ -39,16 +39,8 @@ A feature-rich Markdown editor built as a Power Apps Component Framework (PCF) c
 - **Keyboard Shortcuts**: Tooltips showing shortcuts (Ctrl+B, Ctrl+I, etc.)
 
 ### Advanced Features
-- **Export to HTML**: Download formatted HTML document with custom filename
-- **Export to PDF**: Choose between text-based (searchable) or image-based PDF export
 - **Image Paste**: Paste images directly from clipboard (Ctrl+V), automatically converts to embedded base64
-- **Markdown Paste**: Paste markdown content and it renders immediately
-- **Markdown Templates**: 20+ pre-built templates organized by category:
-  - Meetings: Meeting Notes, Weekly Status, 1:1 Meeting
-  - Development: Bug Report, Code Review, Feature Request, Technical Spec
-  - Project: README, API Documentation, User Guide
-  - Process: Changelog, Release Notes, Decision Record
-  - Quick: Simple Note, Checklist, Comparison Table
+- **Markdown Paste**: Paste markdown content and it renders immediately (`@milkdown/plugin-clipboard`)
 - **Table Editing**: Visual grid picker for insertion, add/delete rows and columns, delete entire table
 - **Copy to Clipboard**: One-click markdown copy with visual feedback
 
@@ -136,15 +128,17 @@ markdown_editor/
 **MarkdownEditor.tsx** - React component with:
 - Milkdown editor integration with GFM support
 - Complete toolbar implementation
-- Export to HTML and PDF
-- Template insertion
 - Debounced updates for performance
 
 ### Available Scripts
 
 ```bash
-# Build the control
+# Build the control (development bundle - unminified, dev React, larger and slower)
 npm run build
+
+# Production build (minified, prod React, no eval wrappers) - always use this
+# before packaging a solution for deployment
+npm run build:prod
 
 # Start watch server with hot reload
 npm start watch
@@ -169,11 +163,13 @@ The control accepts the following input parameters (defined in `ControlManifest.
 | Parameter | Type | Default | Description |
 |-----------|------|---------|-------------|
 | `value` | Multiple Lines of Text | "" | The markdown content (bound property) |
-| `rows` | Whole.None | 10 | Number of rows (controls height: rows × 28px + 80px) |
+| `rows` | Whole.None | 10 | Number of rows (controls height: `rows × 54px + 50px`, ignored if `editorHeight` is set) |
 | `readOnly` | Two Options | false | Whether the editor is a read-only renderer (no toolbar/status bar) |
 | `showToolbar` | Two Options | true | Show/hide the formatting toolbar |
 | `enableSpellCheck` | Two Options | true | Enable spell checking |
 | `maxLength` | Whole.None | 100000 | Maximum character length |
+| `toolbarSize` | Text | "md" | Toolbar button size: `sm`, `md`, or `lg` |
+| `editorHeight` | Whole.None | (unset) | Fixed editor height in pixels; overrides the `rows` formula when set |
 
 Output parameters:
 
@@ -188,7 +184,8 @@ Output parameters:
 
 ### 1. Deploy the Control
 
-1. Build the control: `npm run build`
+1. Build the control: `npm run build:prod` (production build - see [Bundle Size](#bundle-size);
+   do not package the plain `npm run build` output, which is an unminified dev bundle)
 2. Create a solution in your Power Platform environment
 3. Add the control to your solution:
    ```bash
@@ -245,19 +242,23 @@ For detailed Dataverse setup instructions, see [DATAVERSE_INTEGRATION.md](DATAVE
 - **PCF Framework**: Power Apps Component Framework
 - **React 19.2.0**: UI library with hooks
 - **Milkdown 7.17.1**: WYSIWYG markdown editor built on ProseMirror
-- **@fluentui/react-icons 2.0.315**: Microsoft Fluent UI icon library
+- **lucide-react 0.468.0**: Icon library used throughout the toolbar
 - **@milkdown/preset-commonmark**: CommonMark markdown support
 - **@milkdown/preset-gfm**: GitHub Flavored Markdown support
 - **@milkdown/plugin-history**: Undo/redo functionality
-- **jsPDF 3.0.4**: PDF generation for text-based export
-- **html2canvas 1.4.1**: Screenshot capture for image-based PDF export
+- **@milkdown/plugin-clipboard**: Markdown-aware copy/paste handling
+- **@milkdown/plugin-listener**: Change-detection hook that drives notify-on-blur
 - **TypeScript 5.8**: Type-safe development
 - **Webpack**: Module bundling (via pcf-scripts)
 
 ### Bundle Size
 
-- Production bundle: ~7.0 MiB
-- Includes React, Milkdown, Fluent UI Icons, jsPDF, html2canvas, and dependencies
+- Production bundle (`npm run build:prod`): ~736 KB minified, ~215 KB gzipped
+- Dominated by the Milkdown/ProseMirror editor engine itself; React and this control's own
+  code make up the rest
+- The plain `npm run build` output is a **development** bundle (unminified, dev React, `eval`
+  source maps) and is several times larger — always run `build:prod` before packaging a
+  solution for deployment (see [Deploy the Control](#1-deploy-the-control))
 
 ### Browser Support
 
@@ -329,14 +330,13 @@ npm run lint:fix
 
 Before submitting changes:
 - [ ] Build succeeds without errors (`npm run build`)
+- [ ] Production build succeeds (`npm run build:prod`)
 - [ ] ESLint passes (`npm run lint`)
 - [ ] Control loads in test harness
 - [ ] All toolbar buttons work correctly
 - [ ] Height/width sliders work in test harness
 - [ ] Markdown renders correctly
 - [ ] Two-way binding works with Dataverse (value updates on blur, not per keystroke)
-- [ ] Export to HTML works
-- [ ] Export to PDF works (both text and image modes)
 - [ ] No console errors
 
 ## License
@@ -348,7 +348,7 @@ MIT License - see LICENSE file for details
 - [Milkdown](https://milkdown.dev/) - Plugin-driven markdown editor framework
 - [ProseMirror](https://prosemirror.net/) - Underlying editor engine
 - [React](https://react.dev/) - UI framework
-- [jsPDF](https://github.com/parallax/jsPDF) - PDF generation
+- [lucide-react](https://lucide.dev/) - Icon library
 - [Power Apps](https://powerapps.microsoft.com/) - Platform
 
 ## Support

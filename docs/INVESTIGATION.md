@@ -369,6 +369,18 @@ that partially offsets the removals. The win is real but modest in raw bytes; th
 value of this pass was correctness (notify-on-blur, true read-only, hardened validation)
 and removing the theme-nord global CSS leak into the host form, not bundle size alone.
 
+**Result (prod build, post fix-wave-5):** 736,247 bytes minified (215,732 bytes gzip) —
+measured 2026-07-22 via `npm run build:prod` (new script added this pass; see below),
+`ls -l out/controls/MarkdownEditorControl/bundle.js` for the minified size and
+`gzip -c out/controls/MarkdownEditorControl/bundle.js | wc -c` for gzip. Delta vs the
+original pre-changes baseline: **-3,875 bytes minified (-0.52%)**, **-877 bytes gzip
+(-0.40%)**. Essentially flat vs the prior post-changes measurement above (+580 bytes
+minified / +192 bytes gzip) — fix wave 5 was correctness/hardening (maxLength-vs-external-
+apply race, stale isDirtyRef gate, control-character URL rejection, CSS host-page leak
+scoping, readOnly-toggle try/finally) plus a new `build:prod` script and doc corrections,
+none of which meaningfully move bundle weight either direction; the Milkdown/ProseMirror
+engine continues to dominate the total.
+
 ## Cross-reference to the full code review
 
 The broader review (same date) found additional issues not reported here, most notably:
