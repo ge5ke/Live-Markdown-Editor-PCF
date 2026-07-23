@@ -5,7 +5,7 @@ import { commonmark } from '@milkdown/preset-commonmark';
 import { gfm } from '@milkdown/preset-gfm';
 import { nord } from '@milkdown/theme-nord';
 import { listener, listenerCtx } from '@milkdown/plugin-listener';
-import { Editor, rootCtx, defaultValueCtx, editorViewCtx, parserCtx, serializerCtx } from '@milkdown/core';
+import { Editor, rootCtx, defaultValueCtx, editorViewCtx, editorViewOptionsCtx, parserCtx, serializerCtx } from '@milkdown/core';
 import { insertImageCommand } from '@milkdown/preset-commonmark';
 import { history } from '@milkdown/plugin-history';
 import '@milkdown/theme-nord/style.css';
@@ -101,6 +101,9 @@ const EditorComponent: React.FC<Omit<MarkdownEditorProps, 'onChange'> & {
     useEffect(() => {
         maxLengthRef.current = maxLength;
     }, [maxLength]);
+    // Kept in sync via effect below so the editable() closure passed to ProseMirror at editor
+    // creation time always reads the latest readOnly value, not the value from mount time.
+    const readOnlyRef = useRef(readOnly);
 
     // Calculate statistics (optimized - uses refs + direct DOM updates to avoid re-renders)
     const updateStats = useCallback((text: string) => {
@@ -128,6 +131,14 @@ const EditorComponent: React.FC<Omit<MarkdownEditorProps, 'onChange'> & {
                 .config((ctx) => {
                     ctx.set(rootCtx, root);
                     ctx.set(defaultValueCtx, value);
+                    // ProseMirror-level non-editability (not CSS): editable is re-evaluated by
+                    // ProseMirror on every relevant check, so reading readOnlyRef here means a
+                    // later readOnly change (applied via view.setProps below) takes effect
+                    // immediately without recreating the editor.
+                    ctx.update(editorViewOptionsCtx, (prev) => ({
+                        ...prev,
+                        editable: () => !readOnlyRef.current
+                    }));
                 })
                 .config((ctx) => {
                     const listenerPlugin = ctx.get(listenerCtx);
@@ -199,6 +210,24 @@ const EditorComponent: React.FC<Omit<MarkdownEditorProps, 'onChange'> & {
     // Stable getEditor function for hooks
     const getEditor = useCallback(() => get?.(), [get]);
 
+    // Toggle ProseMirror-level editability at runtime (e.g. the host form flips
+    // isControlDisabled). Updates the ref the editable() closure above reads, then forces the
+    // live view to re-read its props - editable is a function, so ProseMirror re-invokes it on
+    // relevant checks, but setProps is what makes it pick up a *changed* closure result now.
+    useEffect(() => {
+        readOnlyRef.current = readOnly;
+
+        const editor = get?.();
+        if (!editor) return;
+
+        try {
+            const view = editor.ctx.get(editorViewCtx);
+            view?.setProps({ editable: () => !readOnlyRef.current });
+        } catch (error) {
+            handleError(error, { component: 'MarkdownEditor', action: 'applyReadOnly' });
+        }
+    }, [readOnly, get]);
+
     // Flush any pending debounced serialize and, if the doc has unflushed edits, notify the
     // parent. Synchronous (no setTimeout) so it is safe to call from a blur handler and from
     // unmount cleanup, where the caller needs the notify to have happened before returning.
@@ -255,7 +284,11 @@ const EditorComponent: React.FC<Omit<MarkdownEditorProps, 'onChange'> & {
 
     // Flush when focus leaves the editor container entirely (blur-to-elsewhere). Moving focus
     // between elements inside the container (e.g. editor -> toolbar button) must NOT flush.
+    // Never attached when readOnly: a read-only editor can never become dirty, and flush() must
+    // never fire onUpdate for one.
     useEffect(() => {
+        if (readOnly) return;
+
         const container = containerRef.current;
         if (!container) return;
 
@@ -268,7 +301,7 @@ const EditorComponent: React.FC<Omit<MarkdownEditorProps, 'onChange'> & {
 
         container.addEventListener('focusout', handleFocusOut);
         return () => container.removeEventListener('focusout', handleFocusOut);
-    }, [flush]);
+    }, [flush, readOnly]);
 
     // Use extracted hooks for editor commands
     const editorCommands = useEditorCommands({ getEditor });
@@ -491,15 +524,18 @@ const EditorComponent: React.FC<Omit<MarkdownEditorProps, 'onChange'> & {
         }
     }, [executeCommand, get]);
 
-    // Attach paste handler to editor (capture phase to intercept before ProseMirror)
+    // Attach paste handler to editor (capture phase to intercept before ProseMirror). Never
+    // attached when readOnly: nothing can be pasted into a non-editable editor.
     useEffect(() => {
+        if (readOnly) return;
+
         const container = containerRef.current;
         if (!container) return;
 
         // Use capture phase to handle paste before ProseMirror does
         container.addEventListener('paste', handlePaste, true);
         return () => container.removeEventListener('paste', handlePaste, true);
-    }, [handlePaste]);
+    }, [handlePaste, readOnly]);
 
     // Determine responsive class based on width
     const getResponsiveClass = () => {
@@ -782,18 +818,15 @@ const EditorComponent: React.FC<Omit<MarkdownEditorProps, 'onChange'> & {
                 )}
             </div>
 
-            <div className="markdown-status-bar">
-                <div className="status-item">
-                    <span id="md-word-count" className="status-metric">Words: {wordCountRef.current}</span>
-                    <span className="status-separator">|</span>
-                    <span id="md-char-count" className="status-metric">Characters: {charCountRef.current} / {maxLength}</span>
-                </div>
-                {readOnly && (
-                    <div className="status-item status-readonly">
-                        <span>Read Only</span>
+            {!readOnly && (
+                <div className="markdown-status-bar">
+                    <div className="status-item">
+                        <span id="md-word-count" className="status-metric">Words: {wordCountRef.current}</span>
+                        <span className="status-separator">|</span>
+                        <span id="md-char-count" className="status-metric">Characters: {charCountRef.current} / {maxLength}</span>
                     </div>
-                )}
-            </div>
+                </div>
+            )}
         </div>
     );
 };
