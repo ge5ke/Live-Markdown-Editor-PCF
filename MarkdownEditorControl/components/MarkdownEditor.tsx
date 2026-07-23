@@ -9,7 +9,8 @@ import { insertImageCommand } from '@milkdown/preset-commonmark';
 import { history } from '@milkdown/plugin-history';
 import { clipboard } from '@milkdown/plugin-clipboard';
 import { $prose } from '@milkdown/utils';
-import { Plugin, PluginKey } from '@milkdown/prose/state';
+import { Plugin, PluginKey, TextSelection } from '@milkdown/prose/state';
+import type { ResolvedPos, MarkType, Mark } from '@milkdown/prose/model';
 
 // Import security utilities
 import { validateImageSize, validateLinkUrl, validateImageUrl } from '../utils/security';
@@ -52,6 +53,67 @@ import {
 
 // Module-level regex constants (compiled once)
 const WORD_MATCH_REGEX = /\S+/g;
+
+// Finds the full extent of a mark of `markType` touching resolved position `$pos` within its
+// parent textblock - e.g. for a link mark, this returns the whole link's [from, to) range and
+// the Mark instance itself (attrs and all), not just wherever a cursor/selection happened to
+// land inside it. Standard ProseMirror "get mark range" algorithm (the same shape used by
+// prosemirror-utils/tiptap): prefer the child just AFTER $pos (matches how ProseMirror itself
+// decides which marks are "active" at a boundary - see markActive-style helpers), falling back
+// to the child just before (covers being resolved at the end of the marked run), then walk
+// outward from that child while siblings carry the *same* Mark instance (isInSet does object
+// identity + attr equality) to find the mark's true start/end.
+//
+// Used by openLinkPopover below so re-opening the Insert Link popover on an EXISTING link seeds
+// the popover from that link's real href/text, and expands the live selection to the link's full
+// extent - not just the collapsed cursor point or partial selection openLinkPopover was invoked
+// with - so a subsequent Insert (which replaces the CURRENT selection) replaces the whole link
+// instead of splicing a duplicate copy into the middle of it.
+function getLinkMarkRange($pos: ResolvedPos, markType: MarkType): { from: number; to: number; mark: Mark } | null {
+    // Named parentBlock rather than the more obvious "parent" - a Power Apps lint rule flags any
+    // identifier literally named `parent` as a possible window.parent/this.parent reference, which
+    // this is not (it's ResolvedPos.parent, the containing ProseMirror node).
+    const parentBlock = $pos.parent;
+    if (!parentBlock.isTextblock) return null;
+
+    const after = parentBlock.childAfter($pos.parentOffset);
+    const before = parentBlock.childBefore($pos.parentOffset);
+
+    let child = after.node;
+    let mark = child ? markType.isInSet(child.marks) : null;
+    let index = after.index;
+    let offset = after.offset;
+
+    if (!mark && before.node) {
+        child = before.node;
+        mark = markType.isInSet(child.marks);
+        index = before.index;
+        offset = before.offset;
+    }
+
+    if (!mark || !child) return null;
+
+    let startIndex = index;
+    let startOffset = offset;
+    let endIndex = index + 1;
+    let endOffset = offset + child.nodeSize;
+
+    while (startIndex > 0) {
+        const prevChild = parentBlock.child(startIndex - 1);
+        if (!mark.isInSet(prevChild.marks)) break;
+        startIndex -= 1;
+        startOffset -= prevChild.nodeSize;
+    }
+    while (endIndex < parentBlock.childCount) {
+        const nextChild = parentBlock.child(endIndex);
+        if (!mark.isInSet(nextChild.marks)) break;
+        endOffset += nextChild.nodeSize;
+        endIndex += 1;
+    }
+
+    const blockStart = $pos.start();
+    return { from: blockStart + startOffset, to: blockStart + endOffset, mark };
+}
 
 // A document that has been fully cleared, or that contains only whitespace, can serialize to
 // something other than the empty string (e.g. a lone newline), depending on the serializer -
@@ -676,23 +738,60 @@ const EditorComponent: React.FC<Omit<MarkdownEditorProps, 'onChange'> & {
         setHoveredCell({ row: 0, col: 0 });
     };
 
-    // Open the Insert Link popover, prefilling the display-text field with the current
-    // selection (matches the old prompt flow's default) so the toolbar button alone triggers it.
+    // Open the Insert Link popover. Two cases:
+    //   - Cursor/selection sits on/inside an EXISTING link: seed linkUrl/linkText from that
+    //     link's real href/text (via getLinkMarkRange above) instead of the 'https://'
+    //     placeholder + raw selection - editing a link used to always discard its real href,
+    //     which was especially easy to miss when the display text already read as a full URL
+    //     (matching-text-and-href links) since the popover LOOKED complete and correct. Also
+    //     expands the live ProseMirror selection to the link's full extent, so a subsequent
+    //     Insert (handleInsertLink replaces the CURRENT selection) replaces the whole link
+    //     instead of splicing a duplicate copy into the middle of it.
+    //   - No link at the cursor/selection: unchanged fresh-insert behavior - prefill
+    //     display-text with the current selection (matches the old prompt flow's default) and
+    //     leave the URL field as the 'https://' placeholder.
     const openLinkPopover = useCallback(() => {
         let selectedText = '';
+        let seededUrl = 'https://';
         const editor = getEditor();
         if (editor) {
             try {
                 const view = editor.ctx.get(editorViewCtx);
                 if (view) {
-                    const { selection, doc } = view.state;
-                    selectedText = doc.textBetween(selection.from, selection.to);
+                    const { selection, doc, schema } = view.state;
+                    const linkMarkType = schema.marks.link;
+                    let linkRange: ReturnType<typeof getLinkMarkRange> = null;
+
+                    if (linkMarkType) {
+                        if (selection.empty) {
+                            // Marks "active" at a collapsed cursor, per ProseMirror convention:
+                            // storedMarks (set right after toggling a mark with nothing
+                            // selected) take priority, else the resolved position's own marks.
+                            const marksAtCursor = view.state.storedMarks || selection.$from.marks();
+                            if (linkMarkType.isInSet(marksAtCursor)) {
+                                linkRange = getLinkMarkRange(selection.$from, linkMarkType);
+                            }
+                        } else if (doc.rangeHasMark(selection.from, selection.to, linkMarkType)) {
+                            linkRange = getLinkMarkRange(selection.$from, linkMarkType)
+                                ?? getLinkMarkRange(selection.$to, linkMarkType);
+                        }
+                    }
+
+                    if (linkRange) {
+                        selectedText = doc.textBetween(linkRange.from, linkRange.to);
+                        seededUrl = linkRange.mark.attrs.href as string;
+                        view.dispatch(
+                            view.state.tr.setSelection(TextSelection.create(view.state.doc, linkRange.from, linkRange.to))
+                        );
+                    } else {
+                        selectedText = doc.textBetween(selection.from, selection.to);
+                    }
                 }
             } catch (error) {
                 handleError(error, { component: 'MarkdownEditor', action: 'openLinkPopover' });
             }
         }
-        setLinkUrl('https://');
+        setLinkUrl(seededUrl);
         setLinkText(selectedText);
         setLinkError(null);
         setShowTablePicker(false);
