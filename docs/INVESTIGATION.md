@@ -357,7 +357,7 @@ Levers, largest first:
 Floor: the Milkdown + ProseMirror editor engine itself stays and is the irreducible core
 of the bundle; the target is everything *around* it.
 
-**Baseline (prod build, pre-changes):** _to be measured_
+**Baseline (prod build, pre-changes):** 740,122 bytes minified (216,609 bytes gzip) — measured 2026-07-22, webpack production mode. (The oft-cited 2.8 MB was the dev build.)
 **Result (prod build, post-changes):** _to be measured_
 
 ## Cross-reference to the full code review
