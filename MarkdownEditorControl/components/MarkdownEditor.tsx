@@ -4,7 +4,7 @@ import { Milkdown, MilkdownProvider, useEditor } from '@milkdown/react';
 import { commonmark } from '@milkdown/preset-commonmark';
 import { gfm } from '@milkdown/preset-gfm';
 import { listener, listenerCtx } from '@milkdown/plugin-listener';
-import { Editor, rootCtx, defaultValueCtx, editorViewCtx, editorViewOptionsCtx, parserCtx, serializerCtx } from '@milkdown/core';
+import { Editor, rootCtx, defaultValueCtx, editorViewCtx, editorViewOptionsCtx, parserCtx, serializerCtx, remarkStringifyOptionsCtx } from '@milkdown/core';
 import { insertImageCommand } from '@milkdown/preset-commonmark';
 import { history } from '@milkdown/plugin-history';
 import { clipboard } from '@milkdown/plugin-clipboard';
@@ -262,6 +262,26 @@ const EditorComponent: React.FC<Omit<MarkdownEditorProps, 'onChange'> & {
                             }
                         }, DEBOUNCE_SERIALIZE_MS);
                     });
+                })
+                .config((ctx) => {
+                    // Force resource-link serialization ([text](url)) for every link, even when
+                    // the display text is identical to the href. mdast-util-to-markdown (which
+                    // remark-stringify - and therefore Milkdown's serializer - sits on) defaults
+                    // resourceLink to false, which makes its link handler prefer GFM/CommonMark
+                    // "autolink" syntax (<url>) whenever text === url (see
+                    // node_modules/mdast-util-to-markdown/lib/util/format-link-as-autolink.js).
+                    // That is valid CommonMark, but plenty of external/HTML-adjacent markdown
+                    // renderers either don't implement autolinks or strip the <...> as an
+                    // unrecognized tag - so a link a maker created with matching display text and
+                    // URL would render as a bare/stripped URL, or nothing, outside Milkdown. No
+                    // other presets or plugins in this chain ever read or write
+                    // remarkStringifyOptionsCtx (only preset-commonmark *reads* .emphasis/.strong
+                    // off it for bullet-marker defaults), so merging resourceLink in here cannot
+                    // clobber anything - see docs/investigation for the verification.
+                    // Re-parsing markdown already stored in the old autolink form still yields a
+                    // real link mark; this only changes what gets WRITTEN on the next serialize,
+                    // so previously-saved records self-heal into resource-link form on next edit.
+                    ctx.update(remarkStringifyOptionsCtx, (prev) => ({ ...prev, resourceLink: true }));
                 })
                 .use(commonmark)
                 .use(gfm)
