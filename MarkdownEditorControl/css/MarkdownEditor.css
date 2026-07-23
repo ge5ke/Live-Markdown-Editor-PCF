@@ -471,17 +471,33 @@ img.ProseMirror-separator { display: inline !important; border: none !important;
 /* Lists */
 .milkdown ul,
 .milkdown ol {
-    padding-left: 2em;
-    margin: 0.75em 0;
+    padding-left: 1.5em;
+    margin: 0.5em 0;
 }
 
 .milkdown li {
-    margin: 0.35em 0;
-    line-height: 1.6;
+    margin: 0.125em 0;
+    line-height: 1.5;
+}
+
+/* ProseMirror wraps each list item's content in a <p>; without this, the
+   paragraph's 0.75em margins stack with the li margins and blow up the rhythm. */
+.milkdown li > p {
+    margin: 0;
+}
+
+/* Nested lists sit tight under their parent item */
+.milkdown li > ul,
+.milkdown li > ol {
+    margin: 0.125em 0;
 }
 
 .milkdown li::marker {
-    color: var(--fluent-brand-primary);
+    color: var(--fluent-fg-secondary);
+}
+
+.milkdown ol > li::marker {
+    font-variant-numeric: tabular-nums;
 }
 
 /* Links */
