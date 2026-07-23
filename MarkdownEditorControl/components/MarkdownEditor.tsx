@@ -122,6 +122,12 @@ const EditorComponent: React.FC<Omit<MarkdownEditorProps, 'onChange'> & {
     const [imageAlt, setImageAlt] = useState('');
     const [imageError, setImageError] = useState<string | null>(null);
     const editorRef = useRef<Editor | null>(null);
+    // Captures the `value` prop exactly as it was at mount (React's useRef initializer only
+    // ever runs once) - the same raw string handed to defaultValueCtx below. The baseline effect
+    // further down parses-then-serializes THIS, never the current `value` prop or the live doc,
+    // so its result is a pure function of what the doc started as, unaffected by anything typed
+    // or re-propped in the meantime.
+    const initialValueRef = useRef<string>(value);
     const currentMarkdownRef = useRef<string>(value);
     // The last markdown actually DELIVERED to the host via onUpdate - distinct from
     // currentMarkdownRef, which the debounced serialize (and flush) update without necessarily
@@ -285,20 +291,23 @@ const EditorComponent: React.FC<Omit<MarkdownEditorProps, 'onChange'> & {
         // compares the result against lastNotifiedRef (what the host actually has); onUpdate only
         // fires when that comparison shows a real difference, so a flush with nothing new to
         // report costs one serialize but never produces a spurious notify.
+        //
+        // Cancel any pending debounced serialize UNCONDITIONALLY, before anything else below can
+        // early-return or throw - flush() promises to be safe to call from unmount/teardown, and
+        // a timer left armed there would later fire against a possibly-destroyed editor ctx (the
+        // error gets caught and swallowed by the timeout's own try/catch, but the invariant "no
+        // work is left pending after flush() returns" would be silently broken).
+        if (serializeTimeoutRef.current) {
+            clearTimeout(serializeTimeoutRef.current);
+            serializeTimeoutRef.current = null;
+        }
+
         const editor = getEditorRef.current?.();
         if (editor) {
             try {
                 const view = editor.ctx.get(editorViewCtx);
                 const serializer = editor.ctx.get(serializerCtx);
                 if (view && serializer) {
-                    // The pending debounced serialize's work is now done synchronously below, so
-                    // cancel it - letting it fire later would just redundantly reserialize the
-                    // same (or since-superseded) doc state without notifying anyone.
-                    if (serializeTimeoutRef.current) {
-                        clearTimeout(serializeTimeoutRef.current);
-                        serializeTimeoutRef.current = null;
-                    }
-
                     let markdown = serializer(view.state.doc);
                     if (/^\s*$/.test(markdown)) {
                         markdown = '';
@@ -338,30 +347,58 @@ const EditorComponent: React.FC<Omit<MarkdownEditorProps, 'onChange'> & {
     // Without this, a user who merely focuses into an untouched editor and blurs back out would
     // trigger flush() to compare a freshly (correctly) normalized serialization against the raw,
     // un-normalized `value`, see a spurious difference, and fire an unwanted onUpdate - patching
-    // the host record with reformatted markdown despite no actual edit. Runs at most once
-    // (baselineSetRef), and only while nothing has touched the doc yet: if the user has already
-    // started editing (isDirtyRef) or a flush has already delivered (deliveredRef) by the time
-    // this runs, lastNotifiedRef already holds the right value for those cases - leave it alone.
-    // Before this effect has run (e.g. the brief window while the editor is still loading), flush
-    // still compares against the raw initial `value` string - a pre-existing, documented, narrow
-    // window that a user cannot realistically hit (no doc exists yet to focus into or blur from).
+    // the host record with reformatted markdown despite no actual edit.
+    //
+    // Deliberately computed as `serializer(parser(initialValueRef.current))` - a pure function of
+    // the mount-time prop - rather than by serializing the LIVE doc (`view.state.doc`) at
+    // whatever moment this effect happens to run. The live EditorView exists and is typeable
+    // BEFORE `get()` resolves/`loading` flips false (this effect's only trigger), so a keystroke
+    // landing in that window would get serialized straight INTO the baseline under a
+    // live-doc-based approach - the user's very first keystroke would then read back as "already
+    // the baseline" and a later blur would deliver nothing. Deriving from the prop instead means
+    // the result can never contain anything the user typed, no matter when this effect actually
+    // runs relative to typing - no race to guard against.
+    //
+    // Runs at most once (baselineSetRef). Skips if a flush has already delivered by the time this
+    // runs (deliveredRef) - lastNotifiedRef already holds the real, correct value for that case;
+    // recomputing from the stale mount-time prop here would clobber it backwards.
     useEffect(() => {
         if (baselineSetRef.current) return;
-        if (isDirtyRef.current || deliveredRef.current) return;
+        if (deliveredRef.current) return;
 
         const editor = get?.();
         if (!editor) return;
 
         try {
-            const view = editor.ctx.get(editorViewCtx);
+            const parser = editor.ctx.get(parserCtx);
             const serializer = editor.ctx.get(serializerCtx);
-            if (!view || !serializer) return;
+            // Leave the raw-string baseline seeded at mount in place if parser/serializer aren't
+            // resolvable - matches this effect's pre-existing fallback behavior (do nothing).
+            if (!parser || !serializer) return;
 
-            let markdown = serializer(view.state.doc);
+            const parsedDoc = parser(initialValueRef.current);
+            if (!parsedDoc) return;
+
+            let markdown = serializer(parsedDoc);
             if (/^\s*$/.test(markdown)) {
                 markdown = '';
             }
             lastNotifiedRef.current = markdown;
+
+            // currentMarkdownRef's semantic is "serialization of the CURRENT doc" - for a doc
+            // that is still pristine (no edit in flight, nothing delivered) at the moment this
+            // baseline resolves, that current-doc serialization IS this same normalized string,
+            // since nothing has changed the doc since mount. Guarded separately from the
+            // lastNotifiedRef write above (which is always safe - it's purely prop-derived):
+            // this write would be WRONG once the user has typed or a flush has already delivered,
+            // since it would clobber live, already-correct content with the stale pre-edit
+            // baseline. isDirtyRef is fine to consult here (unlike as a flush() gate) because
+            // this is not deciding whether to notify anyone - it's only deciding whether
+            // currentMarkdownRef's cached value is still trustworthy to overwrite.
+            if (!isDirtyRef.current && !deliveredRef.current) {
+                currentMarkdownRef.current = markdown;
+            }
+
             baselineSetRef.current = true;
         } catch (error) {
             handleError(error, { component: 'MarkdownEditor', action: 'establishBaseline' });
