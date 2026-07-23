@@ -98,48 +98,6 @@
     --fluent-easing-ease-in-out: cubic-bezier(0.33, 0, 0.67, 1);
 }
 
-/* Dark theme token overrides */
-.dark {
-    --fluent-brand-primary: #479ef5;
-    --fluent-brand-primary-hover: #62abf5;
-    --fluent-brand-primary-pressed: #2886de;
-
-    --fluent-bg-primary: #1a1a1a;
-    --fluent-bg-secondary: #242424;
-    --fluent-bg-tertiary: #2d2d2d;
-    --fluent-bg-subtle: #333333;
-    --fluent-bg-elevated: #2a2a2a;
-
-    --fluent-fg-primary: #ffffff;
-    --fluent-fg-secondary: #d6d6d6;
-    --fluent-fg-tertiary: #adadad;
-    --fluent-fg-disabled: #5c5c5c;
-
-    --fluent-border-default: #3a3a3a;
-    --fluent-border-strong: #454545;
-    --fluent-border-subtle: #333333;
-
-    --fluent-success: #6ccb5f;
-    --fluent-success-bg: #0e3b0e;
-    --fluent-warning: #fce100;
-    --fluent-warning-bg: #433519;
-    --fluent-error: #ff6659;
-    --fluent-error-bg: #442726;
-
-    --fluent-shadow-2: 0 1px 4px rgba(0, 0, 0, 0.4), 0 0 1px rgba(0, 0, 0, 0.3);
-    --fluent-shadow-4: 0 2px 8px rgba(0, 0, 0, 0.45), 0 1px 3px rgba(0, 0, 0, 0.3);
-    --fluent-shadow-8: 0 4px 16px rgba(0, 0, 0, 0.5), 0 2px 6px rgba(0, 0, 0, 0.35);
-
-    --fluent-glow-brand: 0 0 24px rgba(71, 158, 245, 0.35);
-    --fluent-glow-success: 0 0 20px rgba(108, 203, 95, 0.35);
-    --fluent-glow-focus: 0 0 0 3px rgba(71, 158, 245, 0.25);
-
-    --fluent-gradient-toolbar: #333333;
-    --fluent-glass-bg: #2a2a2a;
-    --fluent-glass-border: rgba(255, 255, 255, 0.12);
-    --fluent-dropdown-bg: #333333;
-}
-
 /* ========================================
    MAIN CONTAINER - FLUENT 2.0
    ======================================== */
@@ -567,12 +525,6 @@
     gap: var(--fluent-spacing-s);
 }
 
-.save-status-container {
-    display: flex;
-    align-items: center;
-    gap: var(--fluent-spacing-xs);
-}
-
 .status-icon {
     width: 16px;
     height: 16px;
@@ -585,50 +537,6 @@
     width: 16px;
     height: 16px;
     shape-rendering: geometricPrecision;
-}
-
-.status-icon-saved {
-    color: var(--fluent-success);
-}
-
-.status-icon-saving {
-    color: var(--fluent-brand-primary);
-}
-
-.status-icon-unsaved {
-    color: var(--fluent-warning);
-}
-
-/* Spinning animation for saving icon */
-@keyframes spin {
-    from {
-        transform: rotate(0deg);
-    }
-    to {
-        transform: rotate(360deg);
-    }
-}
-
-.spinning {
-    animation: spin 1s linear infinite;
-}
-
-/* Save status indicator */
-.save-status {
-    font-weight: var(--fluent-font-weight-medium);
-    transition: color var(--fluent-duration-normal) var(--fluent-easing-ease-in-out);
-}
-
-.save-status-saved {
-    color: var(--fluent-success);
-}
-
-.save-status-saving {
-    color: var(--fluent-brand-primary);
-}
-
-.save-status-unsaved {
-    color: var(--fluent-warning);
 }
 
 .status-metric {
@@ -676,12 +584,6 @@
     border-radius: 4px;
     color: #a80000;
     margin: 16px;
-}
-
-.dark .markdown-editor-error {
-    background-color: #442726;
-    border-color: #c50f1f;
-    color: #ff6b6b;
 }
 
 /* Accessibility improvements */
@@ -860,232 +762,6 @@
     font-weight: var(--fluent-font-weight-medium);
 }
 
-/* Search Highlight Styles */
-.search-highlight {
-    background-color: rgba(255, 235, 59, 0.4);
-    border-radius: var(--fluent-radius-small);
-}
-
-.search-highlight-current {
-    background-color: rgba(255, 152, 0, 0.6);
-    border-radius: var(--fluent-radius-small);
-    box-shadow: 0 0 0 1px rgba(255, 152, 0, 0.8);
-}
-
-/* ========================================
-   FIND & REPLACE PANEL - FLUENT 2.0
-   ======================================== */
-.find-replace-panel {
-    display: flex;
-    flex-direction: column;
-    gap: var(--fluent-spacing-s);
-    padding: var(--fluent-spacing-m) var(--fluent-spacing-xl) var(--fluent-spacing-m) var(--fluent-spacing-l);
-    background: var(--fluent-gradient-toolbar);
-    /* backdrop-filter removed for performance */
-    
-    border-bottom: 1px solid var(--fluent-border-subtle);
-    position: relative;
-    
-}
-
-@keyframes fluent-panel-slide-down {
-    from {
-        opacity: 0;
-        transform: translateY(-8px);
-    }
-    to {
-        opacity: 1;
-        transform: translateY(0);
-    }
-}
-
-.find-replace-row {
-    display: flex;
-    align-items: center;
-    gap: var(--fluent-spacing-s);
-}
-
-.find-input-wrapper {
-    position: relative;
-    flex: 1;
-    display: flex;
-    align-items: center;
-}
-
-.find-input-icon {
-    position: absolute;
-    left: var(--fluent-spacing-s);
-    color: var(--fluent-fg-secondary);
-    width: 18px;
-    height: 18px;
-    pointer-events: none;
-}
-
-.find-input-icon svg {
-    width: 18px;
-    height: 18px;
-    shape-rendering: geometricPrecision;
-}
-
-.find-input {
-    flex: 1;
-    padding: var(--fluent-spacing-s) var(--fluent-spacing-m);
-    border: 1px solid var(--fluent-border-default);
-    border-radius: var(--fluent-radius-large);
-    font-size: var(--fluent-font-size-300);
-    font-family: var(--fluent-font-family);
-    background-color: var(--fluent-bg-primary);
-    color: var(--fluent-fg-primary);
-    box-shadow: var(--fluent-shadow-2);
-    transition: background-color 0.1s, color 0.1s;
-}
-
-.find-input.with-icon {
-    padding-left: 38px;
-}
-
-.find-input:hover {
-    border-color: var(--fluent-border-strong);
-    box-shadow: var(--fluent-shadow-4);
-}
-
-.find-input:focus {
-    outline: none;
-    border-color: var(--fluent-brand-primary);
-    box-shadow: var(--fluent-glow-focus), var(--fluent-shadow-4);
-}
-
-.find-input::placeholder {
-    color: var(--fluent-fg-disabled);
-}
-
-.find-results {
-    font-size: var(--fluent-font-size-200);
-    color: var(--fluent-fg-secondary);
-    min-width: 80px;
-    text-align: right;
-    font-weight: var(--fluent-font-weight-medium);
-}
-
-/* Find Navigation Buttons */
-.find-nav-button {
-    display: inline-flex;
-    align-items: center;
-    justify-content: center;
-    width: 32px;
-    height: 32px;
-    padding: 0;
-    background-color: var(--fluent-bg-tertiary);
-    border: 1px solid var(--fluent-border-default);
-    border-radius: var(--fluent-radius-medium);
-    cursor: pointer;
-    color: var(--fluent-fg-primary);
-    transition: background-color 0.1s, color 0.1s;
-}
-
-.find-nav-button svg {
-    width: 16px;
-    height: 16px;
-}
-
-.find-nav-button:hover:not(:disabled) {
-    background-color: var(--fluent-bg-subtle);
-    border-color: var(--fluent-border-strong);
-}
-
-.find-nav-button:active:not(:disabled) {
-    background-color: var(--fluent-bg-tertiary);
-    transform: scale(0.96);
-}
-
-.find-nav-button:disabled {
-    background-color: var(--fluent-bg-secondary);
-    color: var(--fluent-fg-disabled);
-    cursor: not-allowed;
-}
-
-/* Find Action Buttons */
-.find-button {
-    padding: var(--fluent-spacing-s) var(--fluent-spacing-l);
-    background: var(--fluent-gradient-brand);
-    color: var(--fluent-brand-foreground);
-    border: none;
-    border-radius: var(--fluent-radius-circular);
-    cursor: pointer;
-    font-size: var(--fluent-font-size-200);
-    font-weight: var(--fluent-font-weight-semibold);
-    font-family: var(--fluent-font-family);
-    box-shadow: var(--fluent-shadow-4);
-    transition: background-color 0.1s, color 0.1s;
-    white-space: nowrap;
-}
-
-.find-button:hover:not(:disabled) {
-    background: var(--fluent-gradient-brand-hover);
-    box-shadow: var(--fluent-shadow-8), var(--fluent-glow-brand);
-    
-}
-
-.find-button:active:not(:disabled) {
-    background: var(--fluent-gradient-brand);
-    
-    box-shadow: var(--fluent-shadow-2);
-}
-
-.find-button:disabled {
-    background: var(--fluent-fg-disabled);
-    box-shadow: none;
-    cursor: not-allowed;
-}
-
-.find-button-secondary {
-    background: transparent;
-    color: var(--fluent-brand-primary);
-    border: 1.5px solid var(--fluent-brand-primary);
-    box-shadow: none;
-}
-
-.find-button-secondary:hover:not(:disabled) {
-    background-color: rgba(15, 108, 189, 0.1);
-    box-shadow: var(--fluent-shadow-4);
-    
-}
-
-.find-button-secondary:disabled {
-    background-color: transparent;
-    border-color: var(--fluent-fg-disabled);
-    color: var(--fluent-fg-disabled);
-}
-
-/* Find Close Button */
-.find-close {
-    position: absolute;
-    top: var(--fluent-spacing-xs);
-    right: var(--fluent-spacing-xs);
-    width: 24px;
-    height: 24px;
-    padding: 0;
-    display: flex;
-    align-items: center;
-    justify-content: center;
-    background: none;
-    border: none;
-    cursor: pointer;
-    color: var(--fluent-fg-tertiary);
-    border-radius: var(--fluent-radius-small);
-    transition: background-color 0.1s, color 0.1s;
-}
-
-.find-close:hover {
-    background-color: var(--fluent-bg-subtle);
-    color: var(--fluent-fg-primary);
-}
-
-.find-close svg {
-    width: 14px;
-    height: 14px;
-}
-
 /* ========================================
    RESPONSIVE DESIGN
    ======================================== */
@@ -1160,43 +836,6 @@
     display: none;
 }
 
-/* Responsive Find & Replace */
-.markdown-editor-container.compact .find-replace-panel {
-    padding: 8px;
-    gap: 6px;
-}
-
-.markdown-editor-container.compact .find-input {
-    padding: 4px 8px;
-    font-size: 12px;
-}
-
-.markdown-editor-container.compact .find-button {
-    padding: 4px 8px;
-    font-size: 11px;
-}
-
-.markdown-editor-container.compact .find-nav-button {
-    width: 24px;
-    height: 24px;
-}
-
-.markdown-editor-container.very-compact .find-replace-panel {
-    padding: 6px;
-}
-
-.markdown-editor-container.very-compact .find-replace-row {
-    flex-wrap: wrap;
-}
-
-.markdown-editor-container.very-compact .find-results {
-    min-width: auto;
-    width: 100%;
-    text-align: center;
-    order: 10;
-    margin-top: 4px;
-}
-
 /* Smooth transitions for resize */
 .markdown-editor-container,
 .markdown-toolbar,
@@ -1235,22 +874,12 @@
         min-width: 40px;
         height: 40px;
     }
-
-    .find-nav-button {
-        width: 36px;
-        height: 36px;
-    }
-
-    .find-button {
-        padding: 8px 16px;
-    }
 }
 
 /* Print styles */
 @media print {
     .markdown-toolbar,
-    .markdown-status-bar,
-    .find-replace-panel {
+    .markdown-status-bar {
         display: none !important;
     }
 
@@ -1329,10 +958,7 @@
     }
 
     .toolbar-button,
-    .find-button,
-    .find-nav-button,
     .dropdown-item,
-    .find-replace-panel,
     .toolbar-dropdown {
         transition-duration: 0.01ms !important;
         animation-duration: 0.01ms !important;

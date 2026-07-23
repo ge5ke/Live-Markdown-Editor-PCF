@@ -8,10 +8,7 @@ import {
     SAFE_LINK_PROTOCOLS,
     SAFE_IMAGE_PROTOCOLS,
     MAX_IMAGE_SIZE_BYTES,
-    MAX_IMAGE_SIZE_MB,
-    MAX_FILENAME_LENGTH,
-    RESERVED_FILENAMES,
-    INVALID_FILENAME_CHARS
+    MAX_IMAGE_SIZE_MB
 } from './constants';
 
 export interface ValidationResult {
@@ -124,46 +121,6 @@ export function validateImageUrl(url: string): ValidationResult {
 }
 
 /**
- * Validates and sanitizes a filename
- * Enforces length limits, removes invalid characters, handles reserved names
- */
-export function validateFilename(filename: string): ValidationResult {
-    if (!filename || typeof filename !== 'string') {
-        return { valid: false, error: 'Filename is required', sanitized: 'document' };
-    }
-
-    let sanitized = filename.trim();
-
-    if (sanitized === '') {
-        return { valid: true, sanitized: 'document' };
-    }
-
-    // Remove invalid characters
-    sanitized = sanitized.replace(INVALID_FILENAME_CHARS, '_');
-
-    // Remove leading/trailing dots and spaces
-    sanitized = sanitized.replace(/^[.\s]+|[.\s]+$/g, '');
-
-    // Check for reserved names (Windows)
-    const nameWithoutExt = sanitized.split('.')[0].toUpperCase();
-    if (RESERVED_FILENAMES.includes(nameWithoutExt)) {
-        sanitized = '_' + sanitized;
-    }
-
-    // Enforce length limit
-    if (sanitized.length > MAX_FILENAME_LENGTH) {
-        sanitized = sanitized.substring(0, MAX_FILENAME_LENGTH);
-    }
-
-    // Default to 'document' if empty after sanitization
-    if (sanitized === '') {
-        sanitized = 'document';
-    }
-
-    return { valid: true, sanitized };
-}
-
-/**
  * Validates an image file size
  * Enforces maximum size limit (default 5MB)
  */
@@ -181,13 +138,4 @@ export function validateImageSize(file: File | null, maxBytes: number = MAX_IMAG
     }
 
     return { valid: true };
-}
-
-/**
- * Creates a safe filename from user input
- * Convenience function combining validation and sanitization
- */
-export function createSafeFilename(filename: string, defaultName = 'document'): string {
-    const result = validateFilename(filename);
-    return result.sanitized || defaultName;
 }

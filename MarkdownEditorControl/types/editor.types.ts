@@ -13,26 +13,7 @@ export interface MarkdownEditorProps {
     toolbarSize?: 'sm' | 'md' | 'lg';
 }
 
-export type SaveStatus = 'saved' | 'saving' | 'unsaved';
-
 export type EffectiveTheme = 'light' | 'dark' | 'high-contrast';
-
-export interface FindReplaceState {
-    isOpen: boolean;
-    findText: string;
-    replaceText: string;
-    results: FindResults;
-}
-
-export interface FindResults {
-    count: number;
-    current: number;
-}
-
-export interface FindData {
-    positions: number[];
-    searchLength: number;
-}
 
 export interface TablePickerState {
     isOpen: boolean;

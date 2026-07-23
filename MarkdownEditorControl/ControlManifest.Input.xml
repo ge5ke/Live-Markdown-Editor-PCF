@@ -11,7 +11,6 @@
     <property name="rows" display-name-key="Rows" description-key="Number of rows to display (controls height, default: 10)" of-type="Whole.None" usage="input" required="false" />
     <property name="maxLength" display-name-key="Max Length" description-key="Maximum character limit (default: 100000)" of-type="Whole.None" usage="input" required="false" />
     <property name="readOnly" display-name-key="Read Only" description-key="Make editor read-only" of-type="TwoOptions" usage="input" required="false" />
-    <property name="theme" display-name-key="Theme" description-key="Editor theme: light, dark, auto, or high-contrast" of-type="SingleLine.Text" usage="input" required="false" />
     <property name="showToolbar" display-name-key="Show Toolbar" description-key="Show or hide the formatting toolbar" of-type="TwoOptions" usage="input" required="false" />
     <property name="enableSpellCheck" display-name-key="Enable Spell Check" description-key="Enable spell checking" of-type="TwoOptions" usage="input" required="false" />
     <property name="toolbarSize" display-name-key="Toolbar Size" description-key="Toolbar button size: sm, md, or lg (default: md)" of-type="SingleLine.Text" usage="input" required="false" />

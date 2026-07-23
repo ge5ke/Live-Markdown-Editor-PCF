@@ -86,7 +86,6 @@ export class MarkdownEditorControl implements ComponentFramework.StandardControl
         const propsSignature = JSON.stringify({
             value: this._currentValue,
             readOnly: context.parameters.readOnly?.raw,
-            theme: context.parameters.theme?.raw,
             showToolbar: context.parameters.showToolbar?.raw,
             enableSpellCheck: context.parameters.enableSpellCheck?.raw,
             rows: context.parameters.rows?.raw,
@@ -108,10 +107,6 @@ export class MarkdownEditorControl implements ComponentFramework.StandardControl
      */
     private renderComponent(context: ComponentFramework.Context<IInputs>): void {
         const readOnly = context.parameters.readOnly?.raw === true || context.mode.isControlDisabled;
-        const themeValue = context.parameters.theme?.raw || "light";
-        const theme = ["light", "dark", "auto", "high-contrast"].includes(themeValue)
-            ? (themeValue as "light" | "dark" | "auto" | "high-contrast")
-            : "light";
         const showToolbar = context.parameters.showToolbar?.raw !== false;
         const enableSpellCheck = context.parameters.enableSpellCheck?.raw !== false;
         const rowsParam = context.parameters.rows?.raw;
@@ -140,7 +135,6 @@ export class MarkdownEditorControl implements ComponentFramework.StandardControl
                 value: this._currentValue,
                 onChange: this._boundHandleChange,
                 readOnly: readOnly,
-                theme: theme,
                 showToolbar: showToolbar,
                 enableSpellCheck: enableSpellCheck,
                 maxLength: this._maxLength,

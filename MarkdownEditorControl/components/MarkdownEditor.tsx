@@ -17,12 +17,11 @@ import {
     DEBOUNCE_SERIALIZE_MS,
     COPY_SUCCESS_TIMEOUT_MS,
     TABLE_GRID_SIZE,
-    TABLE_MIN_ROWS,
-    MAX_MARKDOWN_LENGTH
+    TABLE_MIN_ROWS
 } from '../utils/constants';
 
 // Import custom hooks
-import { useEditorCommands, useTableOperations, useFindReplace } from '../hooks';
+import { useEditorCommands, useTableOperations } from '../hooks';
 
 // Lucide Icons
 import {
@@ -45,39 +44,18 @@ import {
     Minus,
     Copy,
     Check,
-    Search,
     ChevronDown,
-    ChevronUp,
-    X,
     Plus,
     Trash2,
-    CheckCircle,
-    RefreshCw,
-    Circle,
 } from 'lucide-react';
 
-// Inline SVG icons for theme toggle (avoids pulling in extra icon chunks)
-const SunIcon = () => (
-    <svg width="20" height="20" viewBox="0 0 20 20" fill="currentColor">
-        <path d="M10 2a.75.75 0 01.75.75v1.5a.75.75 0 01-1.5 0v-1.5A.75.75 0 0110 2zm0 12a4 4 0 100-8 4 4 0 000 8zm0-1.5a2.5 2.5 0 110-5 2.5 2.5 0 010 5zm7.25-2.75a.75.75 0 000-1.5h-1.5a.75.75 0 000 1.5h1.5zm-13 0a.75.75 0 000-1.5h-1.5a.75.75 0 000 1.5h1.5zm12.02-4.72a.75.75 0 00-1.06-1.06l-1.06 1.06a.75.75 0 001.06 1.06l1.06-1.06zm-11.44 9.44a.75.75 0 00-1.06-1.06l-1.06 1.06a.75.75 0 001.06 1.06l1.06-1.06zm11.44 0l-1.06-1.06a.75.75 0 00-1.06 1.06l1.06 1.06a.75.75 0 001.06-1.06zM4.83 5.9a.75.75 0 000-1.07l-1.06-1.06a.75.75 0 00-1.06 1.06l1.06 1.06a.75.75 0 001.06 0zM10 15.25a.75.75 0 01.75.75v1.5a.75.75 0 01-1.5 0V16a.75.75 0 01.75-.75z"/>
-    </svg>
-);
-
-const MoonIcon = () => (
-    <svg width="20" height="20" viewBox="0 0 20 20" fill="currentColor">
-        <path d="M7.78 2.04a.75.75 0 00-.99.86 5.5 5.5 0 007.32 6.08.75.75 0 01.98.83 7.5 7.5 0 11-8.17-8.76.75.75 0 01.86.99z"/>
-    </svg>
-);
-
 // Module-level regex constants (compiled once)
-const ESCAPE_REGEX = /[.*+?^${}()|[\]\\]/g;
 const WORD_MATCH_REGEX = /\S+/g;
 
 export interface MarkdownEditorProps {
     value: string;
     onChange: (value: string) => void;
     readOnly?: boolean;
-    theme?: 'light' | 'dark' | 'auto' | 'high-contrast';
     showToolbar?: boolean;
     enableSpellCheck?: boolean;
     maxLength?: number;
@@ -86,8 +64,6 @@ export interface MarkdownEditorProps {
     toolbarSize?: 'sm' | 'md' | 'lg';
 }
 
-type SaveStatus = 'saved' | 'saving' | 'unsaved';
-
 const EditorComponent: React.FC<Omit<MarkdownEditorProps, 'value' | 'onChange'> & {
     onUpdate: (markdown: string) => void;
     initialValue: string;
@@ -95,7 +71,6 @@ const EditorComponent: React.FC<Omit<MarkdownEditorProps, 'value' | 'onChange'> 
     initialValue,
     onUpdate,
     readOnly = false,
-    theme = 'light',
     showToolbar = true,
     maxLength = 100000,
     height,
@@ -107,45 +82,21 @@ const EditorComponent: React.FC<Omit<MarkdownEditorProps, 'value' | 'onChange'> 
     const charCountRef = useRef(0);
     const [editorError, setEditorError] = useState<string | null>(null);
     const [copyStatus, setCopyStatus] = useState<'idle' | 'copied'>('idle');
-    const [saveStatus, setSaveStatus] = useState<SaveStatus>('saved');
     const [showTablePicker, setShowTablePicker] = useState(false);
     const [tableSize, setTableSize] = useState<{ rows: number; cols: number }>({ rows: 3, cols: 3 });
     const [hoveredCell, setHoveredCell] = useState<{ row: number; col: number }>({ row: 0, col: 0 });
-    const [themeOverride, setThemeOverride] = useState<'light' | 'dark' | null>(null);
     const editorRef = useRef<Editor | null>(null);
     const currentMarkdownRef = useRef<string>(initialValue);
-    const saveTimeoutRef = useRef<ReturnType<typeof setTimeout> | null>(null);
     const serializeTimeoutRef = useRef<ReturnType<typeof setTimeout> | null>(null);
-    const statsTimeoutRef = useRef<ReturnType<typeof setTimeout> | null>(null);
-    const pendingSerializeRef = useRef<boolean>(false);
     const focusTimeoutRef = useRef<ReturnType<typeof setTimeout> | null>(null);
-    const rafIdRef = useRef<number | null>(null);
     const containerRef = useRef<HTMLDivElement>(null);
     const getEditorRef = useRef<(() => Editor | undefined) | undefined>(undefined);
-    const lastSaveStatusRef = useRef<SaveStatus>('saved');
-
-    // Determine effective theme (local override takes precedence)
-    const baseTheme = theme === 'auto'
-        ? (window.matchMedia('(prefers-color-scheme: dark)').matches ? 'dark' : 'light')
-        : theme;
-    const effectiveTheme = themeOverride ?? baseTheme;
-
-    // Toggle between light and dark mode
-    const toggleTheme = useCallback(() => {
-        setThemeOverride(prev => {
-            if (prev === null) return effectiveTheme === 'light' ? 'dark' : 'light';
-            return prev === 'light' ? 'dark' : 'light';
-        });
-    }, [effectiveTheme]);
 
     // Cleanup timeouts on unmount
     useEffect(() => {
         return () => {
-            if (saveTimeoutRef.current) clearTimeout(saveTimeoutRef.current);
             if (serializeTimeoutRef.current) clearTimeout(serializeTimeoutRef.current);
-            if (statsTimeoutRef.current) clearTimeout(statsTimeoutRef.current);
             if (focusTimeoutRef.current) clearTimeout(focusTimeoutRef.current);
-            if (rafIdRef.current) cancelAnimationFrame(rafIdRef.current);
         };
     }, []);
 
@@ -251,13 +202,6 @@ const EditorComponent: React.FC<Omit<MarkdownEditorProps, 'value' | 'onChange'> 
         onComplete: () => setShowTablePicker(false)
     });
 
-    // Use extracted hooks for find/replace
-    const findReplaceActions = useFindReplace({
-        getEditor,
-        currentMarkdown: currentMarkdownRef,
-        containerRef
-    });
-
     // Sync editor content when initialValue prop changes (handles late-arriving Dataverse data)
     // Only updates if editor is empty and new value has content
     useEffect(() => {
@@ -285,24 +229,6 @@ const EditorComponent: React.FC<Omit<MarkdownEditorProps, 'value' | 'onChange'> 
             handleError(error, { component: 'MarkdownEditor', action: 'syncInitialValue' });
         }
     }, [initialValue, get]);
-
-    // Centralized focus helper to prevent race conditions
-    const scheduleFocus = useCallback((element: HTMLElement | null, delay = 0) => {
-        if (focusTimeoutRef.current) clearTimeout(focusTimeoutRef.current);
-        if (!element) return;
-
-        const doFocus = () => {
-            requestAnimationFrame(() => {
-                if (document.body.contains(element)) element.focus();
-            });
-        };
-
-        if (delay > 0) {
-            focusTimeoutRef.current = setTimeout(doFocus, delay);
-        } else {
-            doFocus();
-        }
-    }, []);
 
     // Destructure commands from hook for cleaner JSX usage
     const {
@@ -337,18 +263,6 @@ const EditorComponent: React.FC<Omit<MarkdownEditorProps, 'value' | 'onChange'> 
             handleError(error, { component: 'MarkdownEditor', action: 'copyToClipboard' }, 'warning');
         }
     };
-
-    // Destructure find/replace from hook
-    const {
-        isOpen: showFindReplace,
-        findText, replaceText, results: findResults,
-        findInputRef,
-        setFindText, setReplaceText,
-        toggle: toggleFindReplace,
-        close: closeFindReplace,
-        findNext, findPrevious,
-        handleReplace, handleReplaceAll
-    } = findReplaceActions;
 
     // Close dropdowns when clicking outside
     useEffect(() => {
@@ -516,11 +430,11 @@ const EditorComponent: React.FC<Omit<MarkdownEditorProps, 'value' | 'onChange'> 
     return (
         <div
             ref={containerRef}
-            className={`markdown-editor-container ${effectiveTheme} ${readOnly ? 'read-only' : ''} ${getResponsiveClass()}`}
+            className={`markdown-editor-container ${readOnly ? 'read-only' : ''} ${getResponsiveClass()}`}
             style={height ? { height: `${height}px`, minHeight: `${height}px`, maxHeight: `${height}px` } : undefined}
         >
             {showToolbar && !readOnly && (
-                <div className={`markdown-toolbar toolbar-${toolbarSize} ${effectiveTheme}`}>
+                <div className={`markdown-toolbar toolbar-${toolbarSize}`}>
                     {/* History Group */}
                     <div className="toolbar-group" aria-label="History">
                         <button
@@ -677,7 +591,7 @@ const EditorComponent: React.FC<Omit<MarkdownEditorProps, 'value' | 'onChange'> 
                                 <span className="toolbar-button-icon dropdown-chevron"><ChevronDown size={12} /></span>
                             </button>
                             {showTablePicker && (
-                                <div className={`toolbar-dropdown table-dropdown ${effectiveTheme}`}>
+                                <div className="toolbar-dropdown table-dropdown">
                                     <div className="dropdown-section-header">Insert New Table</div>
                                     <div className="table-size-picker">
                                         <div className="table-grid">
@@ -760,95 +674,7 @@ const EditorComponent: React.FC<Omit<MarkdownEditorProps, 'value' | 'onChange'> 
                                 {copyStatus === 'copied' ? <Check size={20} /> : <Copy size={20} />}
                             </span>
                         </button>
-                        <button
-                            className={`toolbar-button ${showFindReplace ? 'active' : ''}`}
-                            onClick={toggleFindReplace}
-                            title="Find & Replace (Ctrl+F)"
-                            aria-label="Find and Replace"
-                        >
-                            <span className="toolbar-button-icon"><Search size={20} /></span>
-                        </button>
                     </div>
-
-                    <div className="toolbar-divider" />
-
-                    {/* Theme Toggle */}
-                    <button
-                        className="toolbar-button"
-                        onClick={toggleTheme}
-                        title={effectiveTheme === 'dark' ? 'Switch to Light Mode' : 'Switch to Dark Mode'}
-                        aria-label={effectiveTheme === 'dark' ? 'Switch to Light Mode' : 'Switch to Dark Mode'}
-                    >
-                        <span className="toolbar-button-icon">
-                            {effectiveTheme === 'dark' ? <SunIcon /> : <MoonIcon />}
-                        </span>
-                    </button>
-                </div>
-            )}
-
-            {/* Find & Replace Panel */}
-            {showFindReplace && (
-                <div className={`find-replace-panel ${effectiveTheme}`}>
-                    <div className="find-replace-row">
-                        <div className="find-input-wrapper">
-                            <span className="find-input-icon"><Search size={20} /></span>
-                            <input
-                                ref={findInputRef}
-                                type="text"
-                                placeholder="Find..."
-                                value={findText}
-                                onChange={(e) => setFindText(e.target.value)}
-                                onKeyDown={(e) => {
-                                    if (e.key === 'Enter') {
-                                        e.preventDefault();
-                                        if (e.shiftKey) {
-                                            findPrevious();
-                                        } else {
-                                            findNext();
-                                        }
-                                    }
-                                }}
-                                className="find-input with-icon"
-                            />
-                        </div>
-                        <button
-                            className="find-nav-button"
-                            onClick={findPrevious}
-                            disabled={findResults.count === 0}
-                            title="Previous match (Shift+Enter)"
-                        >
-                            <ChevronUp size={16} />
-                        </button>
-                        <button
-                            className="find-nav-button"
-                            onClick={findNext}
-                            disabled={findResults.count === 0}
-                            title="Next match (Enter)"
-                        >
-                            <ChevronDown size={12} />
-                        </button>
-                        <span className="find-results">
-                            {findResults.count > 0 ? `${findResults.current} of ${findResults.count}` : 'No results'}
-                        </span>
-                    </div>
-                    <div className="find-replace-row">
-                        <input
-                            type="text"
-                            placeholder="Replace with..."
-                            value={replaceText}
-                            onChange={(e) => setReplaceText(e.target.value)}
-                            className="find-input"
-                        />
-                        <button className="find-button" onClick={handleReplace} disabled={findResults.count === 0}>
-                            Replace
-                        </button>
-                        <button className="find-button find-button-secondary" onClick={handleReplaceAll} disabled={findResults.count === 0}>
-                            Replace All
-                        </button>
-                    </div>
-                    <button className="find-close" onClick={closeFindReplace}>
-                        <X size={16} />
-                    </button>
                 </div>
             )}
 
@@ -874,27 +700,7 @@ const EditorComponent: React.FC<Omit<MarkdownEditorProps, 'value' | 'onChange'> 
                 )}
             </div>
 
-            <div className={`markdown-status-bar ${effectiveTheme}`}>
-                <div className="status-item save-status-container">
-                    {saveStatus === 'saved' && (
-                        <>
-                            <span className="status-icon status-icon-saved"><CheckCircle size={16} /></span>
-                            <span className="save-status save-status-saved">Saved</span>
-                        </>
-                    )}
-                    {saveStatus === 'saving' && (
-                        <>
-                            <span className="status-icon status-icon-saving spinning"><RefreshCw size={16} /></span>
-                            <span className="save-status save-status-saving">Saving...</span>
-                        </>
-                    )}
-                    {saveStatus === 'unsaved' && (
-                        <>
-                            <span className="status-icon status-icon-unsaved"><Circle size={16} /></span>
-                            <span className="save-status save-status-unsaved">Unsaved</span>
-                        </>
-                    )}
-                </div>
+            <div className="markdown-status-bar">
                 <div className="status-item">
                     <span id="md-word-count" className="status-metric">Words: {wordCountRef.current}</span>
                     <span className="status-separator">|</span>
@@ -918,7 +724,6 @@ export const MarkdownEditor: React.FC<MarkdownEditorProps> = React.memo((props) 
                 initialValue={props.value}
                 onUpdate={props.onChange}
                 readOnly={props.readOnly}
-                theme={props.theme}
                 showToolbar={props.showToolbar}
                 enableSpellCheck={props.enableSpellCheck}
                 maxLength={props.maxLength}
@@ -933,7 +738,6 @@ export const MarkdownEditor: React.FC<MarkdownEditorProps> = React.memo((props) 
     return (
         prev.value === next.value &&
         prev.readOnly === next.readOnly &&
-        prev.theme === next.theme &&
         prev.showToolbar === next.showToolbar &&
         prev.enableSpellCheck === next.enableSpellCheck &&
         prev.maxLength === next.maxLength &&
