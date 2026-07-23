@@ -636,11 +636,13 @@ img.ProseMirror-separator { display: inline !important; border: none !important;
     margin: 16px;
 }
 
-/* Accessibility improvements - :focus-visible so the ring only shows for keyboard focus,
-   not on every mouse click into the editor (table-cell selection outlines are unaffected). */
+/* No focus ring on the editing surface: contenteditable elements match :focus-visible
+   whenever focused (they accept keyboard input), so any outline here reappears the moment
+   the user types. The caret and container border are the focus indicators; table-cell
+   selection outlines are separate and unaffected. */
+.milkdown .editor:focus,
 .milkdown .editor:focus-visible {
-    outline: 2px solid var(--fluent-brand-primary);
-    outline-offset: 4px;
+    outline: none;
 }
 
 /* ========================================
