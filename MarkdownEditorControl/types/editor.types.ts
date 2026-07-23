@@ -1,20 +1,5 @@
 import { Editor } from '@milkdown/core';
 
-export interface MarkdownEditorProps {
-    value: string;
-    onChange: (value: string) => void;
-    readOnly?: boolean;
-    theme?: 'light' | 'dark' | 'auto' | 'high-contrast';
-    showToolbar?: boolean;
-    enableSpellCheck?: boolean;
-    maxLength?: number;
-    height?: number;
-    width?: number;
-    toolbarSize?: 'sm' | 'md' | 'lg';
-}
-
-export type EffectiveTheme = 'light' | 'dark' | 'high-contrast';
-
 export interface TablePickerState {
     isOpen: boolean;
     hoveredCell: { row: number; col: number };

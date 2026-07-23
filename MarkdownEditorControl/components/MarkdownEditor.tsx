@@ -64,11 +64,10 @@ export interface MarkdownEditorProps {
     toolbarSize?: 'sm' | 'md' | 'lg';
 }
 
-const EditorComponent: React.FC<Omit<MarkdownEditorProps, 'value' | 'onChange'> & {
+const EditorComponent: React.FC<Omit<MarkdownEditorProps, 'onChange'> & {
     onUpdate: (markdown: string) => void;
-    initialValue: string;
 }> = ({
-    initialValue,
+    value,
     onUpdate,
     readOnly = false,
     showToolbar = true,
@@ -77,28 +76,31 @@ const EditorComponent: React.FC<Omit<MarkdownEditorProps, 'value' | 'onChange'> 
     width,
     toolbarSize = 'md'
 }) => {
-    // Use refs instead of state for stats to avoid re-renders on every keystroke
-    const wordCountRef = useRef(0);
-    const charCountRef = useRef(0);
+    // Use refs instead of state for stats to avoid re-renders on every keystroke.
+    // Seed from the initial value so the status bar is correct before the first edit.
+    const wordCountRef = useRef((value.match(WORD_MATCH_REGEX) || []).length);
+    const charCountRef = useRef(value.length);
     const [editorError, setEditorError] = useState<string | null>(null);
     const [copyStatus, setCopyStatus] = useState<'idle' | 'copied'>('idle');
     const [showTablePicker, setShowTablePicker] = useState(false);
     const [tableSize, setTableSize] = useState<{ rows: number; cols: number }>({ rows: 3, cols: 3 });
     const [hoveredCell, setHoveredCell] = useState<{ row: number; col: number }>({ row: 0, col: 0 });
     const editorRef = useRef<Editor | null>(null);
-    const currentMarkdownRef = useRef<string>(initialValue);
+    const currentMarkdownRef = useRef<string>(value);
+    // True whenever the doc has unflushed edits (set synchronously on every ProseMirror update,
+    // cleared only once flush() has delivered the change via onUpdate).
+    const isDirtyRef = useRef(false);
     const serializeTimeoutRef = useRef<ReturnType<typeof setTimeout> | null>(null);
-    const focusTimeoutRef = useRef<ReturnType<typeof setTimeout> | null>(null);
     const containerRef = useRef<HTMLDivElement>(null);
     const getEditorRef = useRef<(() => Editor | undefined) | undefined>(undefined);
-
-    // Cleanup timeouts on unmount
+    // Kept in sync via effect below so flush() can read the latest maxLength without
+    // needing it as a dependency - onUpdate is the only thing that should ever change
+    // flush's identity, since flush is called from unmount cleanup where a churning
+    // identity would otherwise re-fire the cleanup (and thus flush) on every maxLength change.
+    const maxLengthRef = useRef(maxLength);
     useEffect(() => {
-        return () => {
-            if (serializeTimeoutRef.current) clearTimeout(serializeTimeoutRef.current);
-            if (focusTimeoutRef.current) clearTimeout(focusTimeoutRef.current);
-        };
-    }, []);
+        maxLengthRef.current = maxLength;
+    }, [maxLength]);
 
     // Calculate statistics (optimized - uses refs + direct DOM updates to avoid re-renders)
     const updateStats = useCallback((text: string) => {
@@ -125,28 +127,35 @@ const EditorComponent: React.FC<Omit<MarkdownEditorProps, 'value' | 'onChange'> 
                 .config(nord)
                 .config((ctx) => {
                     ctx.set(rootCtx, root);
-                    ctx.set(defaultValueCtx, initialValue);
+                    ctx.set(defaultValueCtx, value);
                 })
                 .config((ctx) => {
                     const listenerPlugin = ctx.get(listenerCtx);
                     // ULTRA-MINIMAL keystroke handler - do almost nothing synchronously
                     // All expensive work is deferred to prevent ANY typing lag
                     listenerPlugin.updated((_ctx, doc) => {
-                        // Clear existing timeout and set new one - this is the ONLY sync work
+                        // Mark dirty synchronously so flush() knows there is unsaved content,
+                        // even before the debounced serialize below has run.
+                        isDirtyRef.current = true;
+
+                        // Clear existing timeout and set new one - this is the ONLY other sync work
                         if (serializeTimeoutRef.current) {
                             clearTimeout(serializeTimeoutRef.current);
                         }
 
-                        // Defer ALL work to after typing stops
+                        // Defer serialization + stats to after typing stops.
+                        // NOTE: does NOT call onUpdate - notification now happens only on flush (blur/unmount).
                         serializeTimeoutRef.current = setTimeout(() => {
                             try {
                                 // Serialize to markdown
                                 const serializer = ctx.get(serializerCtx);
-                                const markdown = serializer(doc);
+                                let markdown = serializer(doc);
+                                // An emptied document can serialize to whitespace (e.g. a lone newline)
+                                // rather than "" - normalize so clearing the field yields a true empty output.
+                                if (/^\s*$/.test(markdown)) {
+                                    markdown = '';
+                                }
                                 currentMarkdownRef.current = markdown;
-
-                                // Update parent
-                                onUpdate(markdown);
 
                                 // Update stats
                                 const charCount = doc.textContent.length;
@@ -161,6 +170,8 @@ const EditorComponent: React.FC<Omit<MarkdownEditorProps, 'value' | 'onChange'> 
                                 const charEl = document.getElementById('md-char-count');
                                 if (wordEl) wordEl.textContent = `Words: ${words}`;
                                 if (charEl) charEl.textContent = `Characters: ${charCount} / ${maxLength}`;
+
+                                serializeTimeoutRef.current = null;
                             } catch (error) {
                                 handleError(error, { component: 'MarkdownEditor', action: 'serialize' });
                             }
@@ -180,11 +191,6 @@ const EditorComponent: React.FC<Omit<MarkdownEditorProps, 'value' | 'onChange'> 
         }
     }, []);
 
-    // Update stats when value changes
-    useEffect(() => {
-        updateStats(initialValue);
-    }, [initialValue, updateStats]);
-
     // Sync stable editor reference for use in callbacks
     useEffect(() => {
         getEditorRef.current = get;
@@ -192,6 +198,77 @@ const EditorComponent: React.FC<Omit<MarkdownEditorProps, 'value' | 'onChange'> 
 
     // Stable getEditor function for hooks
     const getEditor = useCallback(() => get?.(), [get]);
+
+    // Flush any pending debounced serialize and, if the doc has unflushed edits, notify the
+    // parent. Synchronous (no setTimeout) so it is safe to call from a blur handler and from
+    // unmount cleanup, where the caller needs the notify to have happened before returning.
+    const flush = useCallback(() => {
+        // Re-serialize the current doc if a debounced serialize was still pending, so the
+        // notify below carries the truly latest content instead of a stale pre-debounce value.
+        // Failure here must NOT prevent the onUpdate below - losing the notify would lose the edit.
+        if (serializeTimeoutRef.current) {
+            clearTimeout(serializeTimeoutRef.current);
+            serializeTimeoutRef.current = null;
+
+            try {
+                const editor = getEditorRef.current?.();
+                if (editor) {
+                    const view = editor.ctx.get(editorViewCtx);
+                    const serializer = editor.ctx.get(serializerCtx);
+                    if (view && serializer) {
+                        let markdown = serializer(view.state.doc);
+                        if (/^\s*$/.test(markdown)) {
+                            markdown = '';
+                        }
+                        currentMarkdownRef.current = markdown;
+
+                        const charCount = view.state.doc.textContent.length;
+                        const wordMatches = markdown.match(WORD_MATCH_REGEX);
+                        const words = wordMatches ? wordMatches.length : 0;
+                        charCountRef.current = charCount;
+                        wordCountRef.current = words;
+
+                        const wordEl = document.getElementById('md-word-count');
+                        const charEl = document.getElementById('md-char-count');
+                        if (wordEl) wordEl.textContent = `Words: ${words}`;
+                        if (charEl) charEl.textContent = `Characters: ${charCount} / ${maxLengthRef.current}`;
+                    }
+                }
+            } catch (error) {
+                handleError(error, { component: 'MarkdownEditor', action: 'flush' });
+            }
+        }
+
+        if (isDirtyRef.current) {
+            onUpdate(currentMarkdownRef.current);
+            isDirtyRef.current = false;
+        }
+    }, [onUpdate]);
+
+    // Flush on unmount so edits pending at destroy time are never lost. React runs effect
+    // cleanups synchronously during root.unmount(), so this delivers onUpdate before it returns.
+    useEffect(() => {
+        return () => {
+            flush();
+        };
+    }, [flush]);
+
+    // Flush when focus leaves the editor container entirely (blur-to-elsewhere). Moving focus
+    // between elements inside the container (e.g. editor -> toolbar button) must NOT flush.
+    useEffect(() => {
+        const container = containerRef.current;
+        if (!container) return;
+
+        const handleFocusOut = (e: FocusEvent) => {
+            const related = e.relatedTarget as Node | null;
+            if (!related || !container.contains(related)) {
+                flush();
+            }
+        };
+
+        container.addEventListener('focusout', handleFocusOut);
+        return () => container.removeEventListener('focusout', handleFocusOut);
+    }, [flush]);
 
     // Use extracted hooks for editor commands
     const editorCommands = useEditorCommands({ getEditor });
@@ -202,33 +279,38 @@ const EditorComponent: React.FC<Omit<MarkdownEditorProps, 'value' | 'onChange'> 
         onComplete: () => setShowTablePicker(false)
     });
 
-    // Sync editor content when initialValue prop changes (handles late-arriving Dataverse data)
-    // Only updates if editor is empty and new value has content
+    // Apply external value changes (e.g. late-arriving or refreshed Dataverse data) to the doc.
+    // Only applies when value actually differs from the editor's own content AND the user has no
+    // unflushed edits - if the user is mid-edit, the external value is dropped until their next
+    // flush overwrites it. Replaces the old "sync when empty" effect, which could resurrect
+    // deleted content because it only ever looked at whether the editor was empty.
     useEffect(() => {
-        const editor = get?.();
-        if (!editor || !initialValue) return;
+        if (isDirtyRef.current) return;
+        if (value === currentMarkdownRef.current) return;
 
-        // Only sync if editor is currently empty but props have content
-        const currentContent = currentMarkdownRef.current;
-        if (currentContent && currentContent.trim() !== '') return; // Don't overwrite existing content
+        const editor = get?.();
+        if (!editor) return;
 
         try {
             const view = editor.ctx.get(editorViewCtx);
             const parser = editor.ctx.get(parserCtx);
+            if (!view || !parser) return;
 
-            if (view && parser) {
-                const doc = parser(initialValue);
-                if (doc) {
-                    const { state, dispatch } = view;
-                    const tr = state.tr.replaceWith(0, state.doc.content.size, doc.content);
-                    dispatch(tr);
-                    currentMarkdownRef.current = initialValue;
-                }
-            }
+            const { state, dispatch } = view;
+            // parser("") still yields a doc (an empty paragraph); the fallback below only
+            // matters if a future parser implementation ever returns a falsy value for empty input.
+            const parsedDoc = parser(value) ?? state.schema.topNodeType.createAndFill();
+            if (!parsedDoc) return;
+
+            const tr = state.tr.replaceWith(0, state.doc.content.size, parsedDoc.content);
+            dispatch(tr);
+
+            currentMarkdownRef.current = value;
+            updateStats(value);
         } catch (error) {
-            handleError(error, { component: 'MarkdownEditor', action: 'syncInitialValue' });
+            handleError(error, { component: 'MarkdownEditor', action: 'applyExternalValue' });
         }
-    }, [initialValue, get]);
+    }, [value, get, updateStats]);
 
     // Destructure commands from hook for cleaner JSX usage
     const {
@@ -721,7 +803,7 @@ export const MarkdownEditor: React.FC<MarkdownEditorProps> = React.memo((props) 
     return (
         <MilkdownProvider>
             <EditorComponent
-                initialValue={props.value}
+                value={props.value}
                 onUpdate={props.onChange}
                 readOnly={props.readOnly}
                 showToolbar={props.showToolbar}
