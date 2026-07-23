@@ -357,8 +357,29 @@ Levers, largest first:
 Floor: the Milkdown + ProseMirror editor engine itself stays and is the irreducible core
 of the bundle; the target is everything *around* it.
 
-**Baseline (prod build, pre-changes):** _to be measured_
-**Result (prod build, post-changes):** _to be measured_
+**Baseline (prod build, pre-changes):** 740,122 bytes minified (216,609 bytes gzip) — measured 2026-07-22, webpack production mode. (The oft-cited 2.8 MB was the dev build.)
+**Result (prod build, post-changes):** 735,667 bytes minified (215,540 bytes gzip) —
+measured 2026-07-22, webpack production mode, after `npm ci` for a clean reproducible
+install. Delta vs baseline: **-4,455 bytes minified (-0.60%)**, **-1,069 bytes gzip
+(-0.49%)**. Smaller than the removed-feature surface (Find & Replace, save-status,
+theme machinery, theme-nord) would suggest on its own — the Milkdown/ProseMirror engine
+itself dominates the bundle and is unaffected, and this pass also added code (WHATWG-based
+URL validation, popovers replacing prompts, `@milkdown/plugin-clipboard` paste handling)
+that partially offsets the removals. The win is real but modest in raw bytes; the larger
+value of this pass was correctness (notify-on-blur, true read-only, hardened validation)
+and removing the theme-nord global CSS leak into the host form, not bundle size alone.
+
+**Result (prod build, post fix-wave-5):** 736,247 bytes minified (215,732 bytes gzip) —
+measured 2026-07-22 via `npm run build:prod` (new script added this pass; see below),
+`ls -l out/controls/MarkdownEditorControl/bundle.js` for the minified size and
+`gzip -c out/controls/MarkdownEditorControl/bundle.js | wc -c` for gzip. Delta vs the
+original pre-changes baseline: **-3,875 bytes minified (-0.52%)**, **-877 bytes gzip
+(-0.40%)**. Essentially flat vs the prior post-changes measurement above (+580 bytes
+minified / +192 bytes gzip) — fix wave 5 was correctness/hardening (maxLength-vs-external-
+apply race, stale isDirtyRef gate, control-character URL rejection, CSS host-page leak
+scoping, readOnly-toggle try/finally) plus a new `build:prod` script and doc corrections,
+none of which meaningfully move bundle weight either direction; the Milkdown/ProseMirror
+engine continues to dominate the total.
 
 ## Cross-reference to the full code review
 

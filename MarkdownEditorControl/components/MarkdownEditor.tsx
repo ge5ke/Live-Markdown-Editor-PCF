@@ -3,26 +3,26 @@ import { useEffect, useState, useCallback, useRef } from 'react';
 import { Milkdown, MilkdownProvider, useEditor } from '@milkdown/react';
 import { commonmark } from '@milkdown/preset-commonmark';
 import { gfm } from '@milkdown/preset-gfm';
-import { nord } from '@milkdown/theme-nord';
 import { listener, listenerCtx } from '@milkdown/plugin-listener';
-import { Editor, rootCtx, defaultValueCtx, editorViewCtx, parserCtx, serializerCtx } from '@milkdown/core';
+import { Editor, rootCtx, defaultValueCtx, editorViewCtx, editorViewOptionsCtx, parserCtx, serializerCtx } from '@milkdown/core';
 import { insertImageCommand } from '@milkdown/preset-commonmark';
 import { history } from '@milkdown/plugin-history';
-import '@milkdown/theme-nord/style.css';
+import { clipboard } from '@milkdown/plugin-clipboard';
+import { $prose } from '@milkdown/utils';
+import { Plugin, PluginKey } from '@milkdown/prose/state';
 
 // Import security utilities
-import { validateImageSize } from '../utils/security';
+import { validateImageSize, validateLinkUrl, validateImageUrl } from '../utils/security';
 import { handleError } from '../utils/errorHandler';
 import {
     DEBOUNCE_SERIALIZE_MS,
     COPY_SUCCESS_TIMEOUT_MS,
     TABLE_GRID_SIZE,
-    TABLE_MIN_ROWS,
-    MAX_MARKDOWN_LENGTH
+    TABLE_MIN_ROWS
 } from '../utils/constants';
 
 // Import custom hooks
-import { useEditorCommands, useTableOperations, useFindReplace } from '../hooks';
+import { useEditorCommands, useTableOperations } from '../hooks';
 
 // Lucide Icons
 import {
@@ -45,39 +45,31 @@ import {
     Minus,
     Copy,
     Check,
-    Search,
     ChevronDown,
-    ChevronUp,
-    X,
     Plus,
     Trash2,
-    CheckCircle,
-    RefreshCw,
-    Circle,
 } from 'lucide-react';
 
-// Inline SVG icons for theme toggle (avoids pulling in extra icon chunks)
-const SunIcon = () => (
-    <svg width="20" height="20" viewBox="0 0 20 20" fill="currentColor">
-        <path d="M10 2a.75.75 0 01.75.75v1.5a.75.75 0 01-1.5 0v-1.5A.75.75 0 0110 2zm0 12a4 4 0 100-8 4 4 0 000 8zm0-1.5a2.5 2.5 0 110-5 2.5 2.5 0 010 5zm7.25-2.75a.75.75 0 000-1.5h-1.5a.75.75 0 000 1.5h1.5zm-13 0a.75.75 0 000-1.5h-1.5a.75.75 0 000 1.5h1.5zm12.02-4.72a.75.75 0 00-1.06-1.06l-1.06 1.06a.75.75 0 001.06 1.06l1.06-1.06zm-11.44 9.44a.75.75 0 00-1.06-1.06l-1.06 1.06a.75.75 0 001.06 1.06l1.06-1.06zm11.44 0l-1.06-1.06a.75.75 0 00-1.06 1.06l1.06 1.06a.75.75 0 001.06-1.06zM4.83 5.9a.75.75 0 000-1.07l-1.06-1.06a.75.75 0 00-1.06 1.06l1.06 1.06a.75.75 0 001.06 0zM10 15.25a.75.75 0 01.75.75v1.5a.75.75 0 01-1.5 0V16a.75.75 0 01.75-.75z"/>
-    </svg>
-);
-
-const MoonIcon = () => (
-    <svg width="20" height="20" viewBox="0 0 20 20" fill="currentColor">
-        <path d="M7.78 2.04a.75.75 0 00-.99.86 5.5 5.5 0 007.32 6.08.75.75 0 01.98.83 7.5 7.5 0 11-8.17-8.76.75.75 0 01.86.99z"/>
-    </svg>
-);
-
 // Module-level regex constants (compiled once)
-const ESCAPE_REGEX = /[.*+?^${}()|[\]\\]/g;
 const WORD_MATCH_REGEX = /\S+/g;
+
+// A document that has been fully cleared, or that contains only whitespace, can serialize to
+// something other than the empty string (e.g. a lone newline), depending on the serializer -
+// normalize so "empty" is always exactly "". Shared by every call site that produces a markdown
+// string destined to be compared against another normalized markdown string (the debounced
+// serialize, flush(), the delivery-baseline effect, and the external-apply effect below), so two
+// serializations of "nothing" always compare equal instead of only some of them.
+const normalizeMarkdown = (markdown: string): string => (/^\s*$/.test(markdown) ? '' : markdown);
+
+export interface MarkdownStats {
+    words: number;
+    chars: number;
+}
 
 export interface MarkdownEditorProps {
     value: string;
-    onChange: (value: string) => void;
+    onChange: (value: string, stats: MarkdownStats) => void;
     readOnly?: boolean;
-    theme?: 'light' | 'dark' | 'auto' | 'high-contrast';
     showToolbar?: boolean;
     enableSpellCheck?: boolean;
     maxLength?: number;
@@ -86,70 +78,118 @@ export interface MarkdownEditorProps {
     toolbarSize?: 'sm' | 'md' | 'lg';
 }
 
-type SaveStatus = 'saved' | 'saving' | 'unsaved';
+// Hard-blocks any transaction that would grow the document's rendered text past maxLength.
+// maxLength is read from a ref (rather than closed over as a plain number) so a single plugin
+// instance, created once at editor-creation time, keeps enforcing the CURRENT maxLength even as
+// the host changes the prop later - the alternative (recreating the editor on every maxLength
+// change) would blow away undo history and cursor position.
+//
+// KNOWN LIMIT: the enforced metric is rendered text length (doc.textContent), not the length of
+// the serialized markdown string. Markdown syntax adds overhead (e.g. "**bold**" serializes to
+// more characters than the "bold" text it renders), so the persisted markdown can end up longer
+// than maxLength even though every keystroke was blocked at this boundary. Makers must set
+// maxLength below the Dataverse column's real limit, with headroom for that overhead.
+//
+// That same overhead means a bound `value` LONGER than maxLength arriving from the host is a
+// legitimate case, not a bug - and this guard must never block it. Applying it would have been
+// silently catastrophic: applyExternalValue's caller would still update currentMarkdownRef/
+// lastNotifiedRef/stats as if the doc-replace succeeded, so a later flush would re-serialize the
+// unchanged (stale) doc, see a spurious diff against lastNotifiedRef, and hand the host back its
+// own stale/empty content as if it were a real edit. applyExternalValue tags its transaction with
+// the 'externalApply' meta specifically so this plugin can tell "host-originated, authoritative"
+// apart from "user keystroke, enforce the limit" and let the former through unconditionally.
+const createMaxLengthGuardPlugin = (maxLengthRef: React.MutableRefObject<number>) =>
+    $prose(() => new Plugin({
+        key: new PluginKey('markdown-editor-max-length-guard'),
+        filterTransaction: (tr) => {
+            if (tr.getMeta('externalApply')) return true;
+            if (!tr.docChanged) return true;
+            return tr.doc.textContent.length <= maxLengthRef.current;
+        }
+    }));
 
-const EditorComponent: React.FC<Omit<MarkdownEditorProps, 'value' | 'onChange'> & {
-    onUpdate: (markdown: string) => void;
-    initialValue: string;
+const EditorComponent: React.FC<Omit<MarkdownEditorProps, 'onChange'> & {
+    onUpdate: (markdown: string, stats: MarkdownStats) => void;
 }> = ({
-    initialValue,
+    value,
     onUpdate,
     readOnly = false,
-    theme = 'light',
     showToolbar = true,
+    enableSpellCheck = true,
     maxLength = 100000,
     height,
     width,
     toolbarSize = 'md'
 }) => {
-    // Use refs instead of state for stats to avoid re-renders on every keystroke
-    const wordCountRef = useRef(0);
-    const charCountRef = useRef(0);
+    // Use refs instead of state for stats to avoid re-renders on every keystroke.
+    // Seed from the initial value so the status bar is correct before the first edit.
+    const wordCountRef = useRef((value.match(WORD_MATCH_REGEX) || []).length);
+    const charCountRef = useRef(value.length);
     const [editorError, setEditorError] = useState<string | null>(null);
     const [copyStatus, setCopyStatus] = useState<'idle' | 'copied'>('idle');
-    const [saveStatus, setSaveStatus] = useState<SaveStatus>('saved');
     const [showTablePicker, setShowTablePicker] = useState(false);
     const [tableSize, setTableSize] = useState<{ rows: number; cols: number }>({ rows: 3, cols: 3 });
     const [hoveredCell, setHoveredCell] = useState<{ row: number; col: number }>({ row: 0, col: 0 });
-    const [themeOverride, setThemeOverride] = useState<'light' | 'dark' | null>(null);
+    // Insert Link / Insert Image popovers (replace window.prompt/window.alert). Only one is ever
+    // open at a time, alongside the table picker.
+    const [activePopover, setActivePopover] = useState<'link' | 'image' | null>(null);
+    const [linkUrl, setLinkUrl] = useState('');
+    const [linkText, setLinkText] = useState('');
+    const [linkError, setLinkError] = useState<string | null>(null);
+    const [imageUrl, setImageUrl] = useState('');
+    const [imageAlt, setImageAlt] = useState('');
+    const [imageError, setImageError] = useState<string | null>(null);
     const editorRef = useRef<Editor | null>(null);
-    const currentMarkdownRef = useRef<string>(initialValue);
-    const saveTimeoutRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+    // Captures the `value` prop exactly as it was at mount (React's useRef initializer only
+    // ever runs once) - the same raw string handed to defaultValueCtx below. The baseline effect
+    // further down parses-then-serializes THIS, never the current `value` prop or the live doc,
+    // so its result is a pure function of what the doc started as, unaffected by anything typed
+    // or re-propped in the meantime.
+    const initialValueRef = useRef<string>(value);
+    const currentMarkdownRef = useRef<string>(value);
+    // The last markdown actually DELIVERED to the host via onUpdate - distinct from
+    // currentMarkdownRef, which the debounced serialize (and flush) update without necessarily
+    // notifying. flush() compares its freshly-serialized output against this ref to decide
+    // whether onUpdate is actually needed.
+    const lastNotifiedRef = useRef<string>(value);
+    // True once the "establish delivery baseline" effect below has run (successfully or because
+    // it deliberately skipped - see that effect). Guards it to run its work at most once: after
+    // that, lastNotifiedRef's normalized-baseline job is done and later renders must never
+    // recompute or clobber it.
+    const baselineSetRef = useRef(false);
+    // True once flush() has actually called onUpdate at least once. Distinguishes "never touched
+    // yet" from "touched and already delivered" for the baseline effect below, since isDirtyRef
+    // alone cannot: flush() clears isDirtyRef to false in both cases.
+    const deliveredRef = useRef(false);
+    // Bookkeeping only now (see flush()'s comment) - true whenever the doc has unflushed edits,
+    // set synchronously on every ProseMirror update, cleared once flush() has run. flush() must
+    // NOT gate on this: @milkdown/plugin-listener internally debounces the `updated` callback by
+    // ~200ms, so this flag can still read false immediately after a keystroke.
+    const isDirtyRef = useRef(false);
     const serializeTimeoutRef = useRef<ReturnType<typeof setTimeout> | null>(null);
-    const statsTimeoutRef = useRef<ReturnType<typeof setTimeout> | null>(null);
-    const pendingSerializeRef = useRef<boolean>(false);
-    const focusTimeoutRef = useRef<ReturnType<typeof setTimeout> | null>(null);
-    const rafIdRef = useRef<number | null>(null);
     const containerRef = useRef<HTMLDivElement>(null);
     const getEditorRef = useRef<(() => Editor | undefined) | undefined>(undefined);
-    const lastSaveStatusRef = useRef<SaveStatus>('saved');
-
-    // Determine effective theme (local override takes precedence)
-    const baseTheme = theme === 'auto'
-        ? (window.matchMedia('(prefers-color-scheme: dark)').matches ? 'dark' : 'light')
-        : theme;
-    const effectiveTheme = themeOverride ?? baseTheme;
-
-    // Toggle between light and dark mode
-    const toggleTheme = useCallback(() => {
-        setThemeOverride(prev => {
-            if (prev === null) return effectiveTheme === 'light' ? 'dark' : 'light';
-            return prev === 'light' ? 'dark' : 'light';
-        });
-    }, [effectiveTheme]);
-
-    // Cleanup timeouts on unmount
+    // Kept in sync via effect below so flush() can read the latest maxLength without
+    // needing it as a dependency - onUpdate is the only thing that should ever change
+    // flush's identity, since flush is called from unmount cleanup where a churning
+    // identity would otherwise re-fire the cleanup (and thus flush) on every maxLength change.
+    const maxLengthRef = useRef(maxLength);
     useEffect(() => {
-        return () => {
-            if (saveTimeoutRef.current) clearTimeout(saveTimeoutRef.current);
-            if (serializeTimeoutRef.current) clearTimeout(serializeTimeoutRef.current);
-            if (statsTimeoutRef.current) clearTimeout(statsTimeoutRef.current);
-            if (focusTimeoutRef.current) clearTimeout(focusTimeoutRef.current);
-            if (rafIdRef.current) cancelAnimationFrame(rafIdRef.current);
-        };
-    }, []);
+        maxLengthRef.current = maxLength;
+    }, [maxLength]);
+    // Kept in sync via effect below so the editable() closure passed to ProseMirror at editor
+    // creation time always reads the latest readOnly value, not the value from mount time.
+    const readOnlyRef = useRef(readOnly);
+    // Per-instance DOM refs for the status bar spans - replaces document.getElementById, which
+    // would collide across multiple control instances on the same page sharing the same id.
+    const wordCountElRef = useRef<HTMLSpanElement | null>(null);
+    const charCountElRef = useRef<HTMLSpanElement | null>(null);
 
-    // Calculate statistics (optimized - uses refs + direct DOM updates to avoid re-renders)
+    // Calculate statistics (optimized - uses refs + direct DOM updates to avoid re-renders).
+    // `text` must be doc.textContent (rendered text), NOT the serialized markdown string - that
+    // is the single source of truth for both the word and character counts, shared by every
+    // call site (live typing preview, flush, and external value sync) so the status bar and the
+    // characterCount/wordCount outputs can never disagree.
     const updateStats = useCallback((text: string) => {
         const chars = text.length;
         const wordMatches = text.match(WORD_MATCH_REGEX);
@@ -160,56 +200,63 @@ const EditorComponent: React.FC<Omit<MarkdownEditorProps, 'value' | 'onChange'> 
         charCountRef.current = chars;
 
         // Update DOM directly for instant feedback without re-render
-        const wordEl = document.getElementById('md-word-count');
-        const charEl = document.getElementById('md-char-count');
-        if (wordEl) wordEl.textContent = `Words: ${words}`;
-        if (charEl) charEl.textContent = `Characters: ${chars} / ${maxLength}`;
-    }, [maxLength]);
+        if (wordCountElRef.current) wordCountElRef.current.textContent = `Words: ${words}`;
+        if (charCountElRef.current) charCountElRef.current.textContent = `Characters: ${chars} / ${maxLengthRef.current}`;
+
+        return { words, chars };
+    }, []);
 
     // Initialize Milkdown editor using React hooks following v7 pattern
     const { loading, get } = useEditor((root) => {
         try {
             const editor = Editor
                 .make()
-                .config(nord)
                 .config((ctx) => {
                     ctx.set(rootCtx, root);
-                    ctx.set(defaultValueCtx, initialValue);
+                    ctx.set(defaultValueCtx, value);
+                    // ProseMirror-level non-editability (not CSS): editable is re-evaluated by
+                    // ProseMirror on every relevant check, so reading readOnlyRef here means a
+                    // later readOnly change (applied via view.setProps below) takes effect
+                    // immediately without recreating the editor. spellcheck/aria-label are set
+                    // here from the initial props and kept current by the effect below.
+                    ctx.update(editorViewOptionsCtx, (prev) => ({
+                        ...prev,
+                        editable: () => !readOnlyRef.current,
+                        attributes: {
+                            ...prev.attributes,
+                            spellcheck: String(enableSpellCheck),
+                            'aria-label': 'Markdown editor'
+                        }
+                    }));
                 })
                 .config((ctx) => {
                     const listenerPlugin = ctx.get(listenerCtx);
                     // ULTRA-MINIMAL keystroke handler - do almost nothing synchronously
                     // All expensive work is deferred to prevent ANY typing lag
                     listenerPlugin.updated((_ctx, doc) => {
-                        // Clear existing timeout and set new one - this is the ONLY sync work
+                        // Mark dirty synchronously so flush() knows there is unsaved content,
+                        // even before the debounced serialize below has run.
+                        isDirtyRef.current = true;
+
+                        // Clear existing timeout and set new one - this is the ONLY other sync work
                         if (serializeTimeoutRef.current) {
                             clearTimeout(serializeTimeoutRef.current);
                         }
 
-                        // Defer ALL work to after typing stops
+                        // Defer serialization + stats to after typing stops.
+                        // NOTE: does NOT call onUpdate - notification now happens only on flush (blur/unmount).
                         serializeTimeoutRef.current = setTimeout(() => {
                             try {
                                 // Serialize to markdown
                                 const serializer = ctx.get(serializerCtx);
-                                const markdown = serializer(doc);
+                                const markdown = normalizeMarkdown(serializer(doc));
                                 currentMarkdownRef.current = markdown;
 
-                                // Update parent
-                                onUpdate(markdown);
+                                // Update stats from the rendered doc text (single source of truth),
+                                // not the serialized markdown - see updateStats' comment.
+                                updateStats(doc.textContent);
 
-                                // Update stats
-                                const charCount = doc.textContent.length;
-                                const wordMatches = markdown.match(WORD_MATCH_REGEX);
-                                const words = wordMatches ? wordMatches.length : 0;
-
-                                charCountRef.current = charCount;
-                                wordCountRef.current = words;
-
-                                // Direct DOM updates (no React re-render)
-                                const wordEl = document.getElementById('md-word-count');
-                                const charEl = document.getElementById('md-char-count');
-                                if (wordEl) wordEl.textContent = `Words: ${words}`;
-                                if (charEl) charEl.textContent = `Characters: ${charCount} / ${maxLength}`;
+                                serializeTimeoutRef.current = null;
                             } catch (error) {
                                 handleError(error, { component: 'MarkdownEditor', action: 'serialize' });
                             }
@@ -219,7 +266,9 @@ const EditorComponent: React.FC<Omit<MarkdownEditorProps, 'value' | 'onChange'> 
                 .use(commonmark)
                 .use(gfm)
                 .use(history)
-                .use(listener);
+                .use(listener)
+                .use(clipboard)
+                .use(createMaxLengthGuardPlugin(maxLengthRef));
 
             editorRef.current = editor;
             return editor;
@@ -229,11 +278,6 @@ const EditorComponent: React.FC<Omit<MarkdownEditorProps, 'value' | 'onChange'> 
         }
     }, []);
 
-    // Update stats when value changes
-    useEffect(() => {
-        updateStats(initialValue);
-    }, [initialValue, updateStats]);
-
     // Sync stable editor reference for use in callbacks
     useEffect(() => {
         getEditorRef.current = get;
@@ -241,6 +285,225 @@ const EditorComponent: React.FC<Omit<MarkdownEditorProps, 'value' | 'onChange'> 
 
     // Stable getEditor function for hooks
     const getEditor = useCallback(() => get?.(), [get]);
+
+    // Flush any pending debounced serialize and, if the doc has unflushed edits, notify the
+    // parent. Synchronous (no setTimeout) so it is safe to call from a blur handler and from
+    // unmount cleanup, where the caller needs the notify to have happened before returning.
+    // Declared above the readOnly-toggle effect below (rather than near the unmount-flush effect
+    // further down) because that effect must call it too - flush()'s own identity depends only
+    // on onUpdate (updateStats' identity is stable, deps []), so it does not churn across
+    // unrelated re-renders.
+    const flush = useCallback(() => {
+        // Serializes UNCONDITIONALLY - deliberately does not gate on isDirtyRef.
+        // @milkdown/plugin-listener v7.20 internally debounces its `updated` callback by ~200ms
+        // (see node_modules/@milkdown/plugin-listener/lib/index.js), which is where isDirtyRef
+        // gets set. If focus leaves the container within that window (e.g. typing then
+        // immediately clicking a Save button), isDirtyRef can still read false even though the
+        // doc has just-typed, un-notified content - so isDirtyRef's timing cannot be trusted to
+        // decide whether a flush is needed. Instead, flush always re-serializes the live doc and
+        // compares the result against lastNotifiedRef (what the host actually has); onUpdate only
+        // fires when that comparison shows a real difference, so a flush with nothing new to
+        // report costs one serialize but never produces a spurious notify.
+        //
+        // Cancel any pending debounced serialize UNCONDITIONALLY, before anything else below can
+        // early-return or throw - flush() promises to be safe to call from unmount/teardown, and
+        // a timer left armed there would later fire against a possibly-destroyed editor ctx (the
+        // error gets caught and swallowed by the timeout's own try/catch, but the invariant "no
+        // work is left pending after flush() returns" would be silently broken).
+        if (serializeTimeoutRef.current) {
+            clearTimeout(serializeTimeoutRef.current);
+            serializeTimeoutRef.current = null;
+        }
+
+        const editor = getEditorRef.current?.();
+        if (editor) {
+            try {
+                const view = editor.ctx.get(editorViewCtx);
+                const serializer = editor.ctx.get(serializerCtx);
+                if (view && serializer) {
+                    const markdown = normalizeMarkdown(serializer(view.state.doc));
+                    currentMarkdownRef.current = markdown;
+                    updateStats(view.state.doc.textContent);
+
+                    if (markdown !== lastNotifiedRef.current) {
+                        onUpdate(markdown, { words: wordCountRef.current, chars: charCountRef.current });
+                        lastNotifiedRef.current = markdown;
+                        deliveredRef.current = true;
+                    }
+                    isDirtyRef.current = false;
+                    return;
+                }
+            } catch (error) {
+                handleError(error, { component: 'MarkdownEditor', action: 'flush' });
+            }
+        }
+
+        // Fallback - no editor/view/serializer available (e.g. mid-teardown), or serialization
+        // threw above: deliver whatever currentMarkdownRef last held (e.g. from the debounced
+        // serialize) rather than silently dropping a pending edit, still gated on lastNotifiedRef
+        // so an unchanged value never produces a spurious notify.
+        if (currentMarkdownRef.current !== lastNotifiedRef.current) {
+            onUpdate(currentMarkdownRef.current, { words: wordCountRef.current, chars: charCountRef.current });
+            lastNotifiedRef.current = currentMarkdownRef.current;
+            deliveredRef.current = true;
+        }
+        isDirtyRef.current = false;
+    }, [onUpdate, updateStats]);
+
+    // Establish the delivery baseline once the editor is ready: lastNotifiedRef must hold the
+    // NORMALIZED (parsed-then-serialized) form of the initial doc, not the raw `value` prop as
+    // seeded above - markdown parse -> serialize is a normalizing round-trip (e.g. "* item"
+    // becomes "- item", heading/whitespace forms get canonicalized), not an identity operation.
+    // Without this, a user who merely focuses into an untouched editor and blurs back out would
+    // trigger flush() to compare a freshly (correctly) normalized serialization against the raw,
+    // un-normalized `value`, see a spurious difference, and fire an unwanted onUpdate - patching
+    // the host record with reformatted markdown despite no actual edit.
+    //
+    // Deliberately computed as `serializer(parser(initialValueRef.current))` - a pure function of
+    // the mount-time prop - rather than by serializing the LIVE doc (`view.state.doc`) at
+    // whatever moment this effect happens to run. The live EditorView exists and is typeable
+    // BEFORE `get()` resolves/`loading` flips false (this effect's only trigger), so a keystroke
+    // landing in that window would get serialized straight INTO the baseline under a
+    // live-doc-based approach - the user's very first keystroke would then read back as "already
+    // the baseline" and a later blur would deliver nothing. Deriving from the prop instead means
+    // the result can never contain anything the user typed, no matter when this effect actually
+    // runs relative to typing - no race to guard against.
+    //
+    // Runs at most once (baselineSetRef). Skips if a flush has already delivered by the time this
+    // runs (deliveredRef) - lastNotifiedRef already holds the real, correct value for that case;
+    // recomputing from the stale mount-time prop here would clobber it backwards.
+    useEffect(() => {
+        if (baselineSetRef.current) return;
+        if (deliveredRef.current) return;
+
+        const editor = get?.();
+        if (!editor) return;
+
+        try {
+            const parser = editor.ctx.get(parserCtx);
+            const serializer = editor.ctx.get(serializerCtx);
+            // Leave the raw-string baseline seeded at mount in place if parser/serializer aren't
+            // resolvable - matches this effect's pre-existing fallback behavior (do nothing).
+            if (!parser || !serializer) return;
+
+            const parsedDoc = parser(initialValueRef.current);
+            if (!parsedDoc) return;
+
+            const markdown = normalizeMarkdown(serializer(parsedDoc));
+            lastNotifiedRef.current = markdown;
+
+            // currentMarkdownRef's semantic is "serialization of the CURRENT doc" - for a doc
+            // that is still pristine (no edit in flight, nothing delivered) at the moment this
+            // baseline resolves, that current-doc serialization IS this same normalized string,
+            // since nothing has changed the doc since mount. Guarded separately from the
+            // lastNotifiedRef write above (which is always safe - it's purely prop-derived):
+            // this write would be WRONG once the user has typed or a flush has already delivered,
+            // since it would clobber live, already-correct content with the stale pre-edit
+            // baseline. isDirtyRef is fine to consult here (unlike as a flush() gate) because
+            // this is not deciding whether to notify anyone - it's only deciding whether
+            // currentMarkdownRef's cached value is still trustworthy to overwrite.
+            if (!isDirtyRef.current && !deliveredRef.current) {
+                currentMarkdownRef.current = markdown;
+            }
+
+            baselineSetRef.current = true;
+        } catch (error) {
+            handleError(error, { component: 'MarkdownEditor', action: 'establishBaseline' });
+        }
+    }, [get]);
+
+    // Toggle ProseMirror-level editability at runtime (e.g. the host form flips
+    // isControlDisabled). Updates the ref the editable() closure above reads, then forces the
+    // live view to re-read its props - editable is a function, so ProseMirror re-invokes it on
+    // relevant checks, but setProps is what makes it pick up a *changed* closure result now.
+    useEffect(() => {
+        readOnlyRef.current = readOnly;
+
+        const editor = get?.();
+        if (!editor) return;
+
+        // setProps (which actually flips ProseMirror-level editability) must run whether or not
+        // flush() above succeeds - a throw during flush must not leave the view editable when
+        // readOnly just became true (or vice versa). try/finally, rather than a single try/catch
+        // that falls through, guarantees that: the finally block runs unconditionally, even if
+        // the try block throws and even though flush() and setProps use independent try/catches
+        // of their own so a failure in either is reported without skipping the other.
+        try {
+            // Flush BEFORE disabling editability. Once readOnly is true, this same render's
+            // effect cleanup tears down the focusout listener (see the flush-on-focusout effect
+            // below, which bails out entirely when readOnly), and the only remaining flush
+            // trigger is unmount - so any edit still unflushed at this instant would otherwise
+            // sit silently discarded until (and unless) the component unmounts. flush() is a
+            // no-op when there is nothing dirty, so this is safe to call on every readOnly
+            // transition, not just true->false.
+            if (readOnly) {
+                flush();
+            }
+        } catch (error) {
+            handleError(error, { component: 'MarkdownEditor', action: 'applyReadOnly' });
+        } finally {
+            try {
+                const view = editor.ctx.get(editorViewCtx);
+                view?.setProps({ editable: () => !readOnlyRef.current });
+            } catch (error) {
+                handleError(error, { component: 'MarkdownEditor', action: 'applyReadOnly' });
+            }
+        }
+    }, [readOnly, get, flush]);
+
+    // Apply spellcheck changes to the live view the same way readOnly is applied above.
+    useEffect(() => {
+        const editor = get?.();
+        if (!editor) return;
+
+        try {
+            const view = editor.ctx.get(editorViewCtx);
+            view?.setProps({
+                attributes: {
+                    spellcheck: String(enableSpellCheck),
+                    'aria-label': 'Markdown editor'
+                }
+            });
+        } catch (error) {
+            handleError(error, { component: 'MarkdownEditor', action: 'applySpellCheck' });
+        }
+    }, [enableSpellCheck, get]);
+
+    // Flush on unmount so edits pending at destroy time are never lost. React runs effect
+    // cleanups synchronously during root.unmount(), so this delivers onUpdate before it returns.
+    // Invariant this depends on: @milkdown/react's own cleanup calls editor.destroy() as a
+    // fire-and-forget async call (it does not await it, and React does not wait for it either),
+    // so the editor ctx (view/serializer, read inside flush() via getEditorRef) is still valid
+    // synchronously here, before destroy() has had a chance to tear anything down. Verified
+    // against the vendored source in node_modules/@milkdown/react/lib/index.js (useGetEditor's
+    // cleanup: `() => { editor.destroy().catch(console.error); }`), @milkdown/react +
+    // @milkdown/core 7.20.0.
+    useEffect(() => {
+        return () => {
+            flush();
+        };
+    }, [flush]);
+
+    // Flush when focus leaves the editor container entirely (blur-to-elsewhere). Moving focus
+    // between elements inside the container (e.g. editor -> toolbar button) must NOT flush.
+    // Never attached when readOnly: a read-only editor can never become dirty, and flush() must
+    // never fire onUpdate for one.
+    useEffect(() => {
+        if (readOnly) return;
+
+        const container = containerRef.current;
+        if (!container) return;
+
+        const handleFocusOut = (e: FocusEvent) => {
+            const related = e.relatedTarget as Node | null;
+            if (!related || !container.contains(related)) {
+                flush();
+            }
+        };
+
+        container.addEventListener('focusout', handleFocusOut);
+        return () => container.removeEventListener('focusout', handleFocusOut);
+    }, [flush, readOnly]);
 
     // Use extracted hooks for editor commands
     const editorCommands = useEditorCommands({ getEditor });
@@ -251,64 +514,128 @@ const EditorComponent: React.FC<Omit<MarkdownEditorProps, 'value' | 'onChange'> 
         onComplete: () => setShowTablePicker(false)
     });
 
-    // Use extracted hooks for find/replace
-    const findReplaceActions = useFindReplace({
-        getEditor,
-        currentMarkdown: currentMarkdownRef,
-        containerRef
-    });
-
-    // Sync editor content when initialValue prop changes (handles late-arriving Dataverse data)
-    // Only updates if editor is empty and new value has content
+    // Apply external value changes (e.g. late-arriving or refreshed Dataverse data) to the doc.
+    // Only applies when value actually differs from the editor's own content AND the user has no
+    // unflushed edits - if the user is mid-edit, the external value is dropped until their next
+    // flush overwrites it. Replaces the old "sync when empty" effect, which could resurrect
+    // deleted content because it only ever looked at whether the editor was empty.
     useEffect(() => {
-        const editor = get?.();
-        if (!editor || !initialValue) return;
+        if (value === currentMarkdownRef.current) return;
 
-        // Only sync if editor is currently empty but props have content
-        const currentContent = currentMarkdownRef.current;
-        if (currentContent && currentContent.trim() !== '') return; // Don't overwrite existing content
+        const editor = get?.();
+        if (!editor) return;
 
         try {
             const view = editor.ctx.get(editorViewCtx);
             const parser = editor.ctx.get(parserCtx);
+            const serializer = editor.ctx.get(serializerCtx);
+            if (!view || !parser || !serializer) return;
 
-            if (view && parser) {
-                const doc = parser(initialValue);
-                if (doc) {
-                    const { state, dispatch } = view;
-                    const tr = state.tr.replaceWith(0, state.doc.content.size, doc.content);
-                    dispatch(tr);
-                    currentMarkdownRef.current = initialValue;
-                }
+            // isDirtyRef.current is deliberately NOT used as this effect's dirtiness gate, even
+            // though its name suggests it should be. Per its own declaration comment,
+            // @milkdown/plugin-listener internally debounces its `updated` callback by ~200ms, so
+            // isDirtyRef can still read stale: true right after a flush already delivered
+            // everything (nothing is actually pending), or re-marked true by that same late
+            // callback firing AFTER a previous run of this very effect reset it to false. Either
+            // way, a gate on isDirtyRef would incorrectly treat the editor as dirty and silently
+            // drop the SECOND of two consecutive external updates. Instead, ask the live doc
+            // directly - serialize it and compare against lastNotifiedRef (what the host actually
+            // has), the exact same check flush() itself uses to decide whether there is anything
+            // real to report. Only a genuine, currently-live, unflushed local edit blocks the
+            // apply; serializing here is fine cost-wise since external updates are rare.
+            const actuallyDirty = normalizeMarkdown(serializer(view.state.doc)) !== lastNotifiedRef.current;
+            if (actuallyDirty) return;
+
+            const { state, dispatch } = view;
+            // parser("") still yields a doc (an empty paragraph); the fallback below only
+            // matters if a future parser implementation ever returns a falsy value for empty input.
+            const parsedDoc = parser(value) ?? state.schema.topNodeType.createAndFill();
+            if (!parsedDoc) return;
+
+            // Cancel any pending debounced serialize before replacing the doc below - the doc it
+            // would have serialized is about to be replaced wholesale, so letting it fire later
+            // would clobber currentMarkdownRef with a stale, pre-external-apply serialization.
+            if (serializeTimeoutRef.current) {
+                clearTimeout(serializeTimeoutRef.current);
+                serializeTimeoutRef.current = null;
             }
+
+            const tr = state.tr.replaceWith(0, state.doc.content.size, parsedDoc.content);
+            // Tags this transaction so the maxLength guard plugin (see its own comment) passes
+            // it through unconditionally, even when `value` is longer than maxLength - a
+            // legitimate case (markdown-syntax overhead; see maxLength's doc comment), not an
+            // attack. Without this, the guard would silently filter the transaction while the
+            // code below still updated currentMarkdownRef/lastNotifiedRef/stats as if it had
+            // applied - the exact stale-overwrite bug this tag exists to close.
+            tr.setMeta('externalApply', true);
+            dispatch(tr);
+
+            // Verify the transaction actually landed on the view before trusting it below, rather
+            // than assuming the meta above was honored. Under normal operation this always
+            // succeeds, but re-checking independently means a future change to the guard plugin,
+            // or any other filterTransaction plugin added later, can never leave
+            // currentMarkdownRef/lastNotifiedRef claiming a doc the view does not actually hold -
+            // which would otherwise cause a later flush() to re-serialize the real (unchanged,
+            // stale) doc, see a spurious diff against the just-updated lastNotifiedRef, and fire
+            // onUpdate with stale/empty content, silently overwriting the host's own data.
+            if (!view.state.doc.eq(parsedDoc)) {
+                handleError(
+                    new Error('External value application was rejected by the editor and not applied to the document'),
+                    { component: 'MarkdownEditor', action: 'applyExternalValue' }
+                );
+                return;
+            }
+
+            currentMarkdownRef.current = value;
+            // The host already owns this value (it is the very value we just applied), so it is
+            // also, by definition, the last value the host was notified of - record it here too,
+            // so that a later flush() finds nothing new to report and correctly skips onUpdate
+            // instead of bouncing the host's own value back to it. Deliberately re-serialize
+            // tr.doc here rather than reusing the raw `value` string: markdown parse -> serialize
+            // is a normalizing round-trip (e.g. "* item" -> "- item"), not an identity operation,
+            // so the doc we just built from `value` may not serialize back to `value` verbatim.
+            // lastNotifiedRef must hold what a later flush() will ACTUALLY produce from this doc,
+            // or that later flush would see a spurious (correctly-normalized) difference and fire
+            // an unwanted onUpdate despite no user edit having happened.
+            try {
+                lastNotifiedRef.current = normalizeMarkdown(serializer(tr.doc));
+                baselineSetRef.current = true;
+            } catch (serializeError) {
+                // Fall back to the raw value - not exactly what flush() would produce, but still
+                // far closer than leaving the pre-apply baseline in place, and the error is
+                // surfaced either way.
+                lastNotifiedRef.current = value;
+                handleError(serializeError, { component: 'MarkdownEditor', action: 'applyExternalValue' });
+            }
+            // tr.doc reflects the doc after the replaceWith step above - use its rendered text,
+            // not the raw external markdown string, to keep chars/words on the same metric as
+            // every other call site (markdown syntax length != rendered text length).
+            updateStats(tr.doc.textContent);
+            // The dispatch above re-enters @milkdown/plugin-listener's own internal ~200ms
+            // debounce (see its `apply`/`debouncedHandler`), which will eventually invoke our
+            // `updated` listener registered in the useEditor factory and set isDirtyRef.current =
+            // true for this transaction - even though it originated from the host `value` prop,
+            // not the user. A synchronous set/clear guard around dispatch() cannot suppress that,
+            // because the listener plugin's own debounce means `updated` fires asynchronously,
+            // well after any synchronous guard here would already have been reset. So instead:
+            // currentMarkdownRef was just set to `value` above, meaning the editor now exactly
+            // mirrors the host value with nothing pending - reset isDirtyRef here so a later
+            // readOnly-toggle flush or unmount-flush does not deliver this host-originated
+            // content back to the host as if it were a user edit. Even if isDirtyRef does get
+            // re-marked true by that late callback, neither flush() nor this effect's own
+            // dirtiness check above trusts it either way - both re-serialize and compare against
+            // lastNotifiedRef, which now already matches, so they correctly find nothing changed.
+            isDirtyRef.current = false;
         } catch (error) {
-            handleError(error, { component: 'MarkdownEditor', action: 'syncInitialValue' });
+            handleError(error, { component: 'MarkdownEditor', action: 'applyExternalValue' });
         }
-    }, [initialValue, get]);
-
-    // Centralized focus helper to prevent race conditions
-    const scheduleFocus = useCallback((element: HTMLElement | null, delay = 0) => {
-        if (focusTimeoutRef.current) clearTimeout(focusTimeoutRef.current);
-        if (!element) return;
-
-        const doFocus = () => {
-            requestAnimationFrame(() => {
-                if (document.body.contains(element)) element.focus();
-            });
-        };
-
-        if (delay > 0) {
-            focusTimeoutRef.current = setTimeout(doFocus, delay);
-        } else {
-            doFocus();
-        }
-    }, []);
+    }, [value, get, updateStats]);
 
     // Destructure commands from hook for cleaner JSX usage
     const {
         insertHeading, clearHeading, toggleBold, toggleItalic, toggleStrikethrough,
         handleUndo, handleRedo, insertBlockquote, insertHorizontalRule,
-        insertBulletList, insertOrderedList, insertLink, insertImage, insertCode,
+        insertBulletList, insertOrderedList, insertCode,
         insertTable: insertTableCommand_fn, executeCommand
     } = editorCommands;
 
@@ -317,6 +644,7 @@ const EditorComponent: React.FC<Omit<MarkdownEditorProps, 'value' | 'onChange'> 
 
     // Toggle table picker visibility
     const toggleTablePicker = () => {
+        setActivePopover(null);
         setShowTablePicker(!showTablePicker);
         setHoveredCell({ row: 0, col: 0 });
     };
@@ -328,6 +656,95 @@ const EditorComponent: React.FC<Omit<MarkdownEditorProps, 'value' | 'onChange'> 
         setHoveredCell({ row: 0, col: 0 });
     };
 
+    // Open the Insert Link popover, prefilling the display-text field with the current
+    // selection (matches the old prompt flow's default) so the toolbar button alone triggers it.
+    const openLinkPopover = useCallback(() => {
+        let selectedText = '';
+        const editor = getEditor();
+        if (editor) {
+            try {
+                const view = editor.ctx.get(editorViewCtx);
+                if (view) {
+                    const { selection, doc } = view.state;
+                    selectedText = doc.textBetween(selection.from, selection.to);
+                }
+            } catch (error) {
+                handleError(error, { component: 'MarkdownEditor', action: 'openLinkPopover' });
+            }
+        }
+        setLinkUrl('https://');
+        setLinkText(selectedText);
+        setLinkError(null);
+        setShowTablePicker(false);
+        setActivePopover((prev) => (prev === 'link' ? null : 'link'));
+    }, [getEditor]);
+
+    // Validation errors render inline in the popover (never window.alert) - see validateLinkUrl.
+    const handleInsertLink = useCallback(() => {
+        const validation = validateLinkUrl(linkUrl);
+        // sanitized is always present when valid is true, but the extra check keeps the
+        // compiler-narrowed type a plain string and guarantees the raw linkUrl is never used.
+        if (!validation.valid || !validation.sanitized) {
+            setLinkError(validation.error ?? 'Invalid URL');
+            return;
+        }
+
+        const editor = getEditor();
+        if (!editor) return;
+
+        try {
+            const view = editor.ctx.get(editorViewCtx);
+            if (!view) return;
+
+            const { state, dispatch } = view;
+            const href = validation.sanitized;
+            const displayText = linkText.trim() || href;
+            const linkMark = state.schema.marks.link;
+
+            if (linkMark) {
+                const mark = linkMark.create({ href, title: '' });
+                const textNode = state.schema.text(displayText, [mark]);
+                const tr = state.tr.replaceSelectionWith(textNode, false);
+                dispatch(tr);
+            }
+
+            setActivePopover(null);
+            view.focus();
+        } catch (error) {
+            handleError(error, { component: 'MarkdownEditor', action: 'insertLink' });
+        }
+    }, [getEditor, linkUrl, linkText]);
+
+    const openImagePopover = useCallback(() => {
+        setImageUrl('https://');
+        setImageAlt('');
+        setImageError(null);
+        setShowTablePicker(false);
+        setActivePopover((prev) => (prev === 'image' ? null : 'image'));
+    }, []);
+
+    // Validation errors render inline in the popover (never window.alert) - see validateImageUrl.
+    const handleInsertImage = useCallback(() => {
+        const validation = validateImageUrl(imageUrl);
+        // sanitized is always present when valid is true, but the extra check keeps the
+        // compiler-narrowed type a plain string and guarantees the raw imageUrl is never used.
+        if (!validation.valid || !validation.sanitized) {
+            setImageError(validation.error ?? 'Invalid image URL');
+            return;
+        }
+
+        executeCommand(insertImageCommand.key, {
+            src: validation.sanitized,
+            alt: imageAlt.trim() || 'image'
+        });
+        // executeCommand already refocuses the view, but do so explicitly too (matching
+        // handleInsertLink above) since insertion itself may fail silently (e.g. no image node
+        // at schema) and popover close should not depend on that.
+        const editor = getEditor();
+        editor?.ctx.get(editorViewCtx)?.focus();
+        setActivePopover(null);
+    }, [executeCommand, getEditor, imageUrl, imageAlt]);
+
     const copyToClipboard = async () => {
         try {
             await navigator.clipboard.writeText(currentMarkdownRef.current);
@@ -338,172 +755,105 @@ const EditorComponent: React.FC<Omit<MarkdownEditorProps, 'value' | 'onChange'> 
         }
     };
 
-    // Destructure find/replace from hook
-    const {
-        isOpen: showFindReplace,
-        findText, replaceText, results: findResults,
-        findInputRef,
-        setFindText, setReplaceText,
-        toggle: toggleFindReplace,
-        close: closeFindReplace,
-        findNext, findPrevious,
-        handleReplace, handleReplaceAll
-    } = findReplaceActions;
-
-    // Close dropdowns when clicking outside
+    // Close dropdowns (table picker + link/image popovers) on outside click or Escape. Single
+    // shared mechanism for all three - extend here rather than adding a duplicate effect.
     useEffect(() => {
+        if (!showTablePicker && activePopover === null) return;
+
         const handleClickOutside = (e: MouseEvent) => {
             if (containerRef.current && !containerRef.current.contains(e.target as Node)) {
                 setShowTablePicker(false);
+                setActivePopover(null);
             }
         };
-        if (showTablePicker) {
-            document.addEventListener('mousedown', handleClickOutside);
-            return () => document.removeEventListener('mousedown', handleClickOutside);
-        }
-    }, [showTablePicker]);
-
-    // Helper function to detect if text looks like markdown
-    const looksLikeMarkdown = (text: string): boolean => {
-        // Check for common markdown patterns
-        const markdownPatterns = [
-            /^#{1,6}\s+/m,           // Headers: # Header
-            /\*\*[^*]+\*\*/,         // Bold: **text**
-            /\*[^*]+\*/,             // Italic: *text*
-            /^\s*[-*+]\s+/m,         // Unordered lists: - item
-            /^\s*\d+\.\s+/m,         // Ordered lists: 1. item
-            /\[.+\]\(.+\)/,          // Links: [text](url)
-            /!\[.*\]\(.+\)/,         // Images: ![alt](url)
-            /```[\s\S]*```/,         // Code blocks: ```code```
-            /`[^`]+`/,               // Inline code: `code`
-            /^\|.+\|$/m,             // Tables: | cell |
-            /^>\s+/m,                // Blockquotes: > quote
-            /^---$/m,                // Horizontal rules
-            /~~[^~]+~~/,             // Strikethrough: ~~text~~
-            /^\s*-\s*\[[ x]\]/m,     // Task lists: - [ ] or - [x]
-        ];
-
-        // Count how many patterns match
-        let matchCount = 0;
-        for (const pattern of markdownPatterns) {
-            if (pattern.test(text)) {
-                matchCount++;
+        const handleKeyDown = (e: KeyboardEvent) => {
+            if (e.key === 'Escape') {
+                setShowTablePicker(false);
+                setActivePopover(null);
             }
-        }
+        };
 
-        // Consider it markdown if at least 2 patterns match, or if it has headers/code blocks
-        return matchCount >= 2 || /^#{1,6}\s+/m.test(text) || /```[\s\S]*```/.test(text);
-    };
+        document.addEventListener('mousedown', handleClickOutside);
+        document.addEventListener('keydown', handleKeyDown);
+        return () => {
+            document.removeEventListener('mousedown', handleClickOutside);
+            document.removeEventListener('keydown', handleKeyDown);
+        };
+    }, [showTablePicker, activePopover]);
 
-    // Handle paste events for images and markdown
+    // Handle paste events for images. Markdown paste is now handled by @milkdown/plugin-clipboard
+    // (registered in the .use() chain above), which parses pasted markdown/HTML properly instead
+    // of the previous heuristic-based looksLikeMarkdown() detector.
     const handlePaste = useCallback((e: Event) => {
         const clipboardEvent = e as ClipboardEvent;
         const items = clipboardEvent.clipboardData?.items;
         if (!items) return;
 
-        const itemsArray = Array.from(items);
+        for (const item of Array.from(items)) {
+            if (!item.type.startsWith('image/')) continue;
 
-        // First, check for images
-        for (const item of itemsArray) {
-            if (item.type.startsWith('image/')) {
-                // Stop the event completely to prevent double paste
-                e.preventDefault();
-                e.stopPropagation();
+            // Only claim the event once we actually have a file to handle - inspecting
+            // clipboardData.items does not by itself mean getAsFile() will succeed. Calling
+            // preventDefault/stopPropagation before that check would swallow the paste (e.g.
+            // falling through to plugin-clipboard's markdown handling) even when there is
+            // nothing here to insert.
+            const file = item.getAsFile();
+            if (!file) continue;
 
-                const file = item.getAsFile();
-                if (!file) continue;
-
-                // Validate image size
-                const sizeValidation = validateImageSize(file);
-                if (!sizeValidation.valid) {
-                    window.alert(sizeValidation.error);
-                    return;
-                }
-
-                try {
-                    // Convert image to base64 data URL
-                    const reader = new FileReader();
-                    reader.onload = (event) => {
-                        const dataUrl = event.target?.result as string;
-                        if (dataUrl) {
-                            // Insert the image into the editor
-                            executeCommand(insertImageCommand.key, {
-                                src: dataUrl,
-                                alt: file.name || 'pasted-image'
-                            });
-                        }
-                    };
-                    reader.readAsDataURL(file);
-                } catch (error) {
-                    handleError(error, { component: 'MarkdownEditor', action: 'pasteImage' });
-                }
-                return; // Image handled, exit
-            }
-        }
-
-        // Check for text that looks like markdown
-        const textData = clipboardEvent.clipboardData?.getData('text/plain');
-        if (textData && looksLikeMarkdown(textData)) {
             e.preventDefault();
+            e.stopPropagation();
+
+            // Validate image size
+            const sizeValidation = validateImageSize(file);
+            if (!sizeValidation.valid) {
+                // Mid-paste alert is intentional: there is no anchor UI to render an inline
+                // error against at this point in the flow.
+                window.alert(sizeValidation.error);
+                return;
+            }
 
             try {
-                const editor = get?.();
-                if (!editor) return;
-
-                const view = editor.ctx.get(editorViewCtx);
-                const parser = editor.ctx.get(parserCtx);
-
-                if (view && parser) {
-                    const { state, dispatch } = view;
-
-                    // Check if editor is empty or nearly empty
-                    const currentContent = currentMarkdownRef.current.trim();
-                    const isEmptyOrMinimal = currentContent === '' || currentContent.length < 10;
-
-                    // Parse the markdown into a ProseMirror document
-                    const doc = parser(textData);
-
-                    if (doc) {
-                        if (isEmptyOrMinimal) {
-                            // Replace entire document content for empty editors
-                            const tr = state.tr.replaceWith(0, state.doc.content.size, doc.content);
-                            dispatch(tr);
-                        } else {
-                            // For non-empty editors, try to insert at cursor
-                            // First, check if we're at the start of a block
-                            const { $from } = state.selection;
-                            const atBlockStart = $from.parentOffset === 0;
-
-                            if (atBlockStart && doc.content.childCount > 0) {
-                                // Insert block content properly
-                                const { from, to } = state.selection;
-                                const tr = state.tr.replaceWith(from, to, doc.content);
-                                dispatch(tr);
-                            } else {
-                                // Insert as text slice with proper handling
-                                const { from, to } = state.selection;
-                                const tr = state.tr.replaceWith(from, to, doc.content);
-                                dispatch(tr);
-                            }
-                        }
+                // Convert image to base64 data URL
+                const reader = new FileReader();
+                reader.onload = (event) => {
+                    const dataUrl = event.target?.result as string;
+                    if (dataUrl) {
+                        // Insert the image into the editor
+                        executeCommand(insertImageCommand.key, {
+                            src: dataUrl,
+                            alt: file.name || 'pasted-image'
+                        });
                     }
-                }
+                };
+                reader.readAsDataURL(file);
             } catch (error) {
-                handleError(error, { component: 'MarkdownEditor', action: 'pasteMarkdown' }, 'warning');
-                // If parsing fails, let default paste behavior handle it
+                handleError(error, { component: 'MarkdownEditor', action: 'pasteImage' });
             }
+            return; // Image handled, exit
         }
-    }, [executeCommand, get]);
+    }, [executeCommand]);
 
-    // Attach paste handler to editor (capture phase to intercept before ProseMirror)
+    // Attach the paste handler to the ProseMirror root DOM node itself (not the whole
+    // container), so it never intercepts paste into the popover URL/text inputs. Capture phase
+    // to intercept before ProseMirror/plugin-clipboard sees it. Never attached when readOnly:
+    // nothing can be pasted into a non-editable editor.
     useEffect(() => {
-        const container = containerRef.current;
-        if (!container) return;
+        if (readOnly) return;
 
-        // Use capture phase to handle paste before ProseMirror does
-        container.addEventListener('paste', handlePaste, true);
-        return () => container.removeEventListener('paste', handlePaste, true);
-    }, [handlePaste]);
+        const editor = get?.();
+        if (!editor) return;
+
+        let proseMirrorDom: HTMLElement | undefined;
+        try {
+            proseMirrorDom = editor.ctx.get(editorViewCtx)?.dom;
+        } catch (error) {
+            handleError(error, { component: 'MarkdownEditor', action: 'attachPasteListener' });
+        }
+        if (!proseMirrorDom) return;
+
+        proseMirrorDom.addEventListener('paste', handlePaste, true);
+        return () => proseMirrorDom?.removeEventListener('paste', handlePaste, true);
+    }, [handlePaste, readOnly, get]);
 
     // Determine responsive class based on width
     const getResponsiveClass = () => {
@@ -516,11 +866,11 @@ const EditorComponent: React.FC<Omit<MarkdownEditorProps, 'value' | 'onChange'> 
     return (
         <div
             ref={containerRef}
-            className={`markdown-editor-container ${effectiveTheme} ${readOnly ? 'read-only' : ''} ${getResponsiveClass()}`}
+            className={`markdown-editor-container ${readOnly ? 'read-only' : ''} ${getResponsiveClass()}`}
             style={height ? { height: `${height}px`, minHeight: `${height}px`, maxHeight: `${height}px` } : undefined}
         >
             {showToolbar && !readOnly && (
-                <div className={`markdown-toolbar toolbar-${toolbarSize} ${effectiveTheme}`}>
+                <div className={`markdown-toolbar toolbar-${toolbarSize}`}>
                     {/* History Group */}
                     <div className="toolbar-group" aria-label="History">
                         <button
@@ -602,7 +952,7 @@ const EditorComponent: React.FC<Omit<MarkdownEditorProps, 'value' | 'onChange'> 
                         <button
                             className="toolbar-button"
                             onClick={toggleStrikethrough}
-                            title="Strikethrough (Ctrl+Shift+S)"
+                            title="Strikethrough"
                             aria-label="Toggle Strikethrough"
                         >
                             <span className="toolbar-button-icon"><Strikethrough size={20} /></span>
@@ -613,22 +963,84 @@ const EditorComponent: React.FC<Omit<MarkdownEditorProps, 'value' | 'onChange'> 
 
                     {/* Insert Group */}
                     <div className="toolbar-group" aria-label="Insert">
-                        <button
-                            className="toolbar-button"
-                            onClick={insertLink}
-                            title="Insert Link (Ctrl+K)"
-                            aria-label="Insert Link"
-                        >
-                            <span className="toolbar-button-icon"><Link size={20} /></span>
-                        </button>
-                        <button
-                            className="toolbar-button"
-                            onClick={insertImage}
-                            title="Insert Image"
-                            aria-label="Insert Image"
-                        >
-                            <span className="toolbar-button-icon"><Image size={20} /></span>
-                        </button>
+                        <div className="toolbar-dropdown-container">
+                            <button
+                                className={`toolbar-button ${activePopover === 'link' ? 'active' : ''}`}
+                                onClick={openLinkPopover}
+                                title="Insert Link"
+                                aria-label="Insert Link"
+                                aria-expanded={activePopover === 'link'}
+                            >
+                                <span className="toolbar-button-icon"><Link size={20} /></span>
+                            </button>
+                            {activePopover === 'link' && (
+                                <div className="toolbar-dropdown popover" role="dialog" aria-label="Insert Link">
+                                    <div className="dropdown-section-header">Insert Link</div>
+                                    <input
+                                        className="popover-input"
+                                        type="text"
+                                        value={linkUrl}
+                                        onChange={(e) => { setLinkUrl(e.target.value); setLinkError(null); }}
+                                        onKeyDown={(e) => { if (e.key === 'Enter') handleInsertLink(); }}
+                                        placeholder="https://example.com"
+                                        aria-label="Link URL"
+                                        autoFocus
+                                    />
+                                    <input
+                                        className="popover-input"
+                                        type="text"
+                                        value={linkText}
+                                        onChange={(e) => setLinkText(e.target.value)}
+                                        onKeyDown={(e) => { if (e.key === 'Enter') handleInsertLink(); }}
+                                        placeholder="Link text (optional)"
+                                        aria-label="Link display text"
+                                    />
+                                    {linkError && <div className="popover-error">{linkError}</div>}
+                                    <div className="popover-actions">
+                                        <button className="popover-submit" onClick={handleInsertLink}>Insert</button>
+                                    </div>
+                                </div>
+                            )}
+                        </div>
+                        <div className="toolbar-dropdown-container">
+                            <button
+                                className={`toolbar-button ${activePopover === 'image' ? 'active' : ''}`}
+                                onClick={openImagePopover}
+                                title="Insert Image"
+                                aria-label="Insert Image"
+                                aria-expanded={activePopover === 'image'}
+                            >
+                                <span className="toolbar-button-icon"><Image size={20} /></span>
+                            </button>
+                            {activePopover === 'image' && (
+                                <div className="toolbar-dropdown popover" role="dialog" aria-label="Insert Image">
+                                    <div className="dropdown-section-header">Insert Image</div>
+                                    <input
+                                        className="popover-input"
+                                        type="text"
+                                        value={imageUrl}
+                                        onChange={(e) => { setImageUrl(e.target.value); setImageError(null); }}
+                                        onKeyDown={(e) => { if (e.key === 'Enter') handleInsertImage(); }}
+                                        placeholder="https://example.com/image.png"
+                                        aria-label="Image URL"
+                                        autoFocus
+                                    />
+                                    <input
+                                        className="popover-input"
+                                        type="text"
+                                        value={imageAlt}
+                                        onChange={(e) => setImageAlt(e.target.value)}
+                                        onKeyDown={(e) => { if (e.key === 'Enter') handleInsertImage(); }}
+                                        placeholder="Alt text (optional)"
+                                        aria-label="Image alt text"
+                                    />
+                                    {imageError && <div className="popover-error">{imageError}</div>}
+                                    <div className="popover-actions">
+                                        <button className="popover-submit" onClick={handleInsertImage}>Insert</button>
+                                    </div>
+                                </div>
+                            )}
+                        </div>
                     </div>
 
                     <div className="toolbar-divider" />
@@ -677,7 +1089,7 @@ const EditorComponent: React.FC<Omit<MarkdownEditorProps, 'value' | 'onChange'> 
                                 <span className="toolbar-button-icon dropdown-chevron"><ChevronDown size={12} /></span>
                             </button>
                             {showTablePicker && (
-                                <div className={`toolbar-dropdown table-dropdown ${effectiveTheme}`}>
+                                <div className="toolbar-dropdown table-dropdown">
                                     <div className="dropdown-section-header">Insert New Table</div>
                                     <div className="table-size-picker">
                                         <div className="table-grid">
@@ -760,95 +1172,7 @@ const EditorComponent: React.FC<Omit<MarkdownEditorProps, 'value' | 'onChange'> 
                                 {copyStatus === 'copied' ? <Check size={20} /> : <Copy size={20} />}
                             </span>
                         </button>
-                        <button
-                            className={`toolbar-button ${showFindReplace ? 'active' : ''}`}
-                            onClick={toggleFindReplace}
-                            title="Find & Replace (Ctrl+F)"
-                            aria-label="Find and Replace"
-                        >
-                            <span className="toolbar-button-icon"><Search size={20} /></span>
-                        </button>
                     </div>
-
-                    <div className="toolbar-divider" />
-
-                    {/* Theme Toggle */}
-                    <button
-                        className="toolbar-button"
-                        onClick={toggleTheme}
-                        title={effectiveTheme === 'dark' ? 'Switch to Light Mode' : 'Switch to Dark Mode'}
-                        aria-label={effectiveTheme === 'dark' ? 'Switch to Light Mode' : 'Switch to Dark Mode'}
-                    >
-                        <span className="toolbar-button-icon">
-                            {effectiveTheme === 'dark' ? <SunIcon /> : <MoonIcon />}
-                        </span>
-                    </button>
-                </div>
-            )}
-
-            {/* Find & Replace Panel */}
-            {showFindReplace && (
-                <div className={`find-replace-panel ${effectiveTheme}`}>
-                    <div className="find-replace-row">
-                        <div className="find-input-wrapper">
-                            <span className="find-input-icon"><Search size={20} /></span>
-                            <input
-                                ref={findInputRef}
-                                type="text"
-                                placeholder="Find..."
-                                value={findText}
-                                onChange={(e) => setFindText(e.target.value)}
-                                onKeyDown={(e) => {
-                                    if (e.key === 'Enter') {
-                                        e.preventDefault();
-                                        if (e.shiftKey) {
-                                            findPrevious();
-                                        } else {
-                                            findNext();
-                                        }
-                                    }
-                                }}
-                                className="find-input with-icon"
-                            />
-                        </div>
-                        <button
-                            className="find-nav-button"
-                            onClick={findPrevious}
-                            disabled={findResults.count === 0}
-                            title="Previous match (Shift+Enter)"
-                        >
-                            <ChevronUp size={16} />
-                        </button>
-                        <button
-                            className="find-nav-button"
-                            onClick={findNext}
-                            disabled={findResults.count === 0}
-                            title="Next match (Enter)"
-                        >
-                            <ChevronDown size={12} />
-                        </button>
-                        <span className="find-results">
-                            {findResults.count > 0 ? `${findResults.current} of ${findResults.count}` : 'No results'}
-                        </span>
-                    </div>
-                    <div className="find-replace-row">
-                        <input
-                            type="text"
-                            placeholder="Replace with..."
-                            value={replaceText}
-                            onChange={(e) => setReplaceText(e.target.value)}
-                            className="find-input"
-                        />
-                        <button className="find-button" onClick={handleReplace} disabled={findResults.count === 0}>
-                            Replace
-                        </button>
-                        <button className="find-button find-button-secondary" onClick={handleReplaceAll} disabled={findResults.count === 0}>
-                            Replace All
-                        </button>
-                    </div>
-                    <button className="find-close" onClick={closeFindReplace}>
-                        <X size={16} />
-                    </button>
                 </div>
             )}
 
@@ -874,38 +1198,15 @@ const EditorComponent: React.FC<Omit<MarkdownEditorProps, 'value' | 'onChange'> 
                 )}
             </div>
 
-            <div className={`markdown-status-bar ${effectiveTheme}`}>
-                <div className="status-item save-status-container">
-                    {saveStatus === 'saved' && (
-                        <>
-                            <span className="status-icon status-icon-saved"><CheckCircle size={16} /></span>
-                            <span className="save-status save-status-saved">Saved</span>
-                        </>
-                    )}
-                    {saveStatus === 'saving' && (
-                        <>
-                            <span className="status-icon status-icon-saving spinning"><RefreshCw size={16} /></span>
-                            <span className="save-status save-status-saving">Saving...</span>
-                        </>
-                    )}
-                    {saveStatus === 'unsaved' && (
-                        <>
-                            <span className="status-icon status-icon-unsaved"><Circle size={16} /></span>
-                            <span className="save-status save-status-unsaved">Unsaved</span>
-                        </>
-                    )}
-                </div>
-                <div className="status-item">
-                    <span id="md-word-count" className="status-metric">Words: {wordCountRef.current}</span>
-                    <span className="status-separator">|</span>
-                    <span id="md-char-count" className="status-metric">Characters: {charCountRef.current} / {maxLength}</span>
-                </div>
-                {readOnly && (
-                    <div className="status-item status-readonly">
-                        <span>Read Only</span>
+            {!readOnly && (
+                <div className="markdown-status-bar">
+                    <div className="status-item">
+                        <span ref={wordCountElRef} className="status-metric">Words: {wordCountRef.current}</span>
+                        <span className="status-separator">|</span>
+                        <span ref={charCountElRef} className="status-metric">Characters: {charCountRef.current} / {maxLength}</span>
                     </div>
-                )}
-            </div>
+                </div>
+            )}
         </div>
     );
 };
@@ -915,10 +1216,9 @@ export const MarkdownEditor: React.FC<MarkdownEditorProps> = React.memo((props) 
     return (
         <MilkdownProvider>
             <EditorComponent
-                initialValue={props.value}
+                value={props.value}
                 onUpdate={props.onChange}
                 readOnly={props.readOnly}
-                theme={props.theme}
                 showToolbar={props.showToolbar}
                 enableSpellCheck={props.enableSpellCheck}
                 maxLength={props.maxLength}
@@ -933,7 +1233,6 @@ export const MarkdownEditor: React.FC<MarkdownEditorProps> = React.memo((props) 
     return (
         prev.value === next.value &&
         prev.readOnly === next.readOnly &&
-        prev.theme === next.theme &&
         prev.showToolbar === next.showToolbar &&
         prev.enableSpellCheck === next.enableSpellCheck &&
         prev.maxLength === next.maxLength &&

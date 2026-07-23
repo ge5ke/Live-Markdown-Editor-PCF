@@ -114,6 +114,7 @@ export function useTableOperations({ getEditor, onComplete, onNotify }: UseTable
 
             const tr = state.tr.insert(insertPos, newRow);
             dispatch(tr);
+            view.focus();
             onComplete?.();
         } catch (error) {
             handleError(error, { component: 'useTableOperations', action: 'addTableRow' });
@@ -188,6 +189,7 @@ export function useTableOperations({ getEditor, onComplete, onNotify }: UseTable
             const tableEnd = $from.after(tableDepth);
             const tr = state.tr.replaceWith(tableStart, tableEnd, newTable);
             dispatch(tr);
+            view.focus();
             onComplete?.();
         } catch (error) {
             handleError(error, { component: 'useTableOperations', action: 'addTableColumn' });
@@ -228,6 +230,7 @@ export function useTableOperations({ getEditor, onComplete, onNotify }: UseTable
                     const end = $from.after(depth);
                     const tr = state.tr.delete(start, end);
                     dispatch(tr);
+                    view.focus();
                     onComplete?.();
                     return;
                 }
@@ -303,6 +306,7 @@ export function useTableOperations({ getEditor, onComplete, onNotify }: UseTable
             const tableEnd = $from.after(tableDepth);
             const tr = state.tr.replaceWith(tableStart, tableEnd, newTable);
             dispatch(tr);
+            view.focus();
             onComplete?.();
         } catch (error) {
             handleError(error, { component: 'useTableOperations', action: 'deleteTableColumn' });
@@ -328,6 +332,7 @@ export function useTableOperations({ getEditor, onComplete, onNotify }: UseTable
                     const end = pos.after(depth);
                     const tr = state.tr.delete(start, end);
                     dispatch(tr);
+                    view.focus();
                     onComplete?.();
                     return;
                 }

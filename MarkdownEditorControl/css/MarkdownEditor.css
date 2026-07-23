@@ -1,7 +1,13 @@
 /* ========================================
    FLUENT 2.0 DESIGN TOKENS
+   Scoped to .markdown-editor-container (NOT :root) - a PCF control's CSS is injected into the
+   host page's <head> and applies to the WHOLE model-driven form, so a :root block would leak
+   ~60 custom properties as globals onto every other control/web-resource on the page. Every
+   piece of this control's markup renders inside .markdown-editor-container (see
+   MarkdownEditor.tsx's JSX root), so scoping the tokens there costs nothing - custom properties
+   inherit down through the whole subtree exactly like :root would, just without escaping it.
    ======================================== */
-:root {
+.markdown-editor-container {
     /* === Color Tokens === */
     /* Brand colors - vibrant blues */
     --fluent-brand-primary: #0078d4;
@@ -98,48 +104,6 @@
     --fluent-easing-ease-in-out: cubic-bezier(0.33, 0, 0.67, 1);
 }
 
-/* Dark theme token overrides */
-.dark {
-    --fluent-brand-primary: #479ef5;
-    --fluent-brand-primary-hover: #62abf5;
-    --fluent-brand-primary-pressed: #2886de;
-
-    --fluent-bg-primary: #1a1a1a;
-    --fluent-bg-secondary: #242424;
-    --fluent-bg-tertiary: #2d2d2d;
-    --fluent-bg-subtle: #333333;
-    --fluent-bg-elevated: #2a2a2a;
-
-    --fluent-fg-primary: #ffffff;
-    --fluent-fg-secondary: #d6d6d6;
-    --fluent-fg-tertiary: #adadad;
-    --fluent-fg-disabled: #5c5c5c;
-
-    --fluent-border-default: #3a3a3a;
-    --fluent-border-strong: #454545;
-    --fluent-border-subtle: #333333;
-
-    --fluent-success: #6ccb5f;
-    --fluent-success-bg: #0e3b0e;
-    --fluent-warning: #fce100;
-    --fluent-warning-bg: #433519;
-    --fluent-error: #ff6659;
-    --fluent-error-bg: #442726;
-
-    --fluent-shadow-2: 0 1px 4px rgba(0, 0, 0, 0.4), 0 0 1px rgba(0, 0, 0, 0.3);
-    --fluent-shadow-4: 0 2px 8px rgba(0, 0, 0, 0.45), 0 1px 3px rgba(0, 0, 0, 0.3);
-    --fluent-shadow-8: 0 4px 16px rgba(0, 0, 0, 0.5), 0 2px 6px rgba(0, 0, 0, 0.35);
-
-    --fluent-glow-brand: 0 0 24px rgba(71, 158, 245, 0.35);
-    --fluent-glow-success: 0 0 20px rgba(108, 203, 95, 0.35);
-    --fluent-glow-focus: 0 0 0 3px rgba(71, 158, 245, 0.25);
-
-    --fluent-gradient-toolbar: #333333;
-    --fluent-glass-bg: #2a2a2a;
-    --fluent-glass-border: rgba(255, 255, 255, 0.12);
-    --fluent-dropdown-bg: #333333;
-}
-
 /* ========================================
    MAIN CONTAINER - FLUENT 2.0
    ======================================== */
@@ -156,6 +120,23 @@
     position: relative;
 }
 
+/* Structural corner rounding: whichever section happens to be first/last in the DOM gets the
+   matching corners, instead of hard-coding radius onto specific sections. This means read-only
+   mode (wrapper is the ONLY child) rounds all four corners on the wrapper automatically, and
+   edit mode (toolbar first, wrapper middle, status bar last) rounds only the outer sections -
+   no per-composition CSS needed. A border-radius clips an element's OWN background by itself
+   (no overflow: hidden required), so the table dropdown and popovers - which escape their
+   ancestors via position: absolute - are never clipped. */
+.markdown-editor-container > :first-child {
+    border-top-left-radius: var(--fluent-radius-large);
+    border-top-right-radius: var(--fluent-radius-large);
+}
+
+.markdown-editor-container > :last-child {
+    border-bottom-left-radius: var(--fluent-radius-large);
+    border-bottom-right-radius: var(--fluent-radius-large);
+}
+
 /* ========================================
    TOOLBAR - FLUENT 2.0
    ======================================== */
@@ -166,7 +147,6 @@
     padding: var(--fluent-spacing-s) var(--fluent-spacing-m);
     background: var(--fluent-gradient-toolbar);
     border-bottom: 1px solid var(--fluent-border-default);
-    border-radius: var(--fluent-radius-large) var(--fluent-radius-large) 0 0; /* 8px top corners */
     flex-wrap: wrap;
     position: relative;
     z-index: 100;
@@ -230,11 +210,6 @@
     height: 20px;
     /* Crisp SVG rendering */
     shape-rendering: geometricPrecision;
-}
-
-.toolbar-button-label {
-    font-size: var(--fluent-font-size-200);
-    font-weight: var(--fluent-font-weight-semibold);
 }
 
 .toolbar-button:hover {
@@ -313,16 +288,84 @@
 /* ========================================
    EDITOR AREA - FLUENT 2.0
    ======================================== */
+
+/* ProseMirror base — replaces theme-nord */
+.milkdown .ProseMirror {
+    position: relative;
+    word-wrap: break-word;
+    white-space: pre-wrap;
+    -webkit-font-variant-ligatures: none;
+    font-variant-ligatures: none;
+    outline: none;
+}
+.milkdown .ProseMirror pre { white-space: pre-wrap; }
+.milkdown .ProseMirror [contenteditable="false"] { white-space: normal; }
+.milkdown .ProseMirror [contenteditable="false"] [contenteditable="true"] { white-space: pre-wrap; }
+.milkdown .ProseMirror-hideselection * { caret-color: transparent; }
+.milkdown .ProseMirror-selectednode { outline: 2px solid var(--fluent-brand-primary); }
+.milkdown img.ProseMirror-separator { display: inline !important; border: none !important; margin: 0 !important; }
+.milkdown .ProseMirror-gapcursor { display: none; pointer-events: none; position: absolute; }
+.milkdown .ProseMirror-gapcursor:after { content: ""; display: block; position: absolute; top: -2px; width: 20px; border-top: 1px solid currentColor; animation: ProseMirror-cursor-blink 1.1s steps(2, start) infinite; }
+@keyframes ProseMirror-cursor-blink { to { visibility: hidden; } }
+.milkdown .ProseMirror-focused .ProseMirror-gapcursor { display: block; }
+
+/* Additional load-bearing rules ported from the removed theme package's stylesheet, beyond the
+   block above: prosemirror-tables' columnResizing/tableEditing plugins (enabled by
+   @milkdown/preset-gfm's table support, independent of any theme) apply these classes/
+   decorations directly, so without them the column-resize handle mis-positions (it needs a
+   positioned ancestor) and multi-cell selection has no visible affordance at all. */
+.milkdown .ProseMirror td,
+.milkdown .ProseMirror th {
+    position: relative;
+}
+.milkdown .ProseMirror .column-resize-handle {
+    position: absolute;
+    top: 0;
+    bottom: 0;
+    right: -2px;
+    width: 4px;
+    z-index: 20;
+    background-color: var(--fluent-brand-primary);
+    pointer-events: none;
+}
+.milkdown .ProseMirror.resize-cursor {
+    cursor: col-resize;
+}
+.milkdown .ProseMirror .selectedCell:after {
+    content: "";
+    position: absolute;
+    inset: 0;
+    z-index: 2;
+    background: rgba(0, 120, 212, 0.15);
+    pointer-events: none;
+}
+
+/* Click-to-interact scroll: the wrapper does not capture the page's scroll wheel until the
+   user has actually focused into the editor (no overscroll-behavior: contain, no
+   scroll-behavior: smooth - both would fight the page's own scrolling). Default overflow-y:
+   hidden lets an unfocused editor's own content simply clip rather than eat scroll events that
+   were meant for the page; overflow-y: auto is restored the moment the container gains focus,
+   via :focus-within below. scrollbar-gutter: stable reserves the scrollbar's width up front so
+   toggling into overflow-y: auto never shifts the layout. */
 .markdown-editor-wrapper {
     flex: 1;
-    overflow-y: auto;
+    overflow-y: hidden;
     overflow-x: hidden;
+    scrollbar-gutter: stable;
     padding: var(--fluent-spacing-l) var(--fluent-spacing-xl);
     background-color: var(--fluent-bg-primary);
-    scroll-behavior: smooth;
-    overscroll-behavior: contain;
     position: relative;
     z-index: 1;
+}
+
+.markdown-editor-container:focus-within .markdown-editor-wrapper {
+    overflow-y: auto;
+}
+
+/* Read-only is a pure renderer with no toolbar/status bar affordances to signal "click to
+   scroll" - always allow scrolling so long content is never hidden with no way to reach it. */
+.markdown-editor-container.read-only .markdown-editor-wrapper {
+    overflow-y: auto;
 }
 
 .milkdown-editor {
@@ -335,7 +378,7 @@
     max-height: 100%;
 }
 
-/* Milkdown theme customization - override Nord theme centering */
+/* Milkdown root wrapper - force full-width, no centering (Milkdown/ProseMirror defaults) */
 .milkdown {
     position: relative;
     margin: 0 !important;
@@ -354,8 +397,10 @@
     text-align: left;
 }
 
-/* Override any ProseMirror centering from themes */
-.ProseMirror {
+/* Override any ProseMirror default centering. Scoped to .milkdown (not bare .ProseMirror) -
+   the unscoped selector would style ANY ProseMirror-based editor elsewhere on the host page,
+   not just this control's own. */
+.milkdown .ProseMirror {
     margin: 0 !important;
     max-width: 100% !important;
     text-align: left !important;
@@ -434,17 +479,33 @@
 /* Lists */
 .milkdown ul,
 .milkdown ol {
-    padding-left: 2em;
-    margin: 0.75em 0;
+    padding-left: 1.5em;
+    margin: 0.5em 0;
 }
 
 .milkdown li {
-    margin: 0.35em 0;
-    line-height: 1.6;
+    margin: 0.125em 0;
+    line-height: 1.5;
+}
+
+/* ProseMirror wraps each list item's content in a <p>; without this, the
+   paragraph's 0.75em margins stack with the li margins and blow up the rhythm. */
+.milkdown li > p {
+    margin: 0;
+}
+
+/* Nested lists sit tight under their parent item */
+.milkdown li > ul,
+.milkdown li > ol {
+    margin: 0.125em 0;
 }
 
 .milkdown li::marker {
-    color: var(--fluent-brand-primary);
+    color: var(--fluent-fg-secondary);
+}
+
+.milkdown ol > li::marker {
+    font-variant-numeric: tabular-nums;
 }
 
 /* Links */
@@ -550,85 +611,20 @@
     display: flex;
     align-items: center;
     justify-content: space-between;
-    padding: var(--fluent-spacing-xs) var(--fluent-spacing-m);
+    padding: 1px var(--fluent-spacing-m);
     background: var(--fluent-gradient-toolbar);
     /* backdrop-filter removed for performance */
 
     border-top: 1px solid var(--fluent-border-default);
-    border-radius: 0 0 var(--fluent-radius-large) var(--fluent-radius-large); /* 8px bottom corners */
-    font-size: var(--fluent-font-size-200);
+    font-size: 11px;
     color: var(--fluent-fg-secondary);
-    min-height: 36px;
+    min-height: 22px;
 }
 
 .status-item {
     display: flex;
     align-items: center;
     gap: var(--fluent-spacing-s);
-}
-
-.save-status-container {
-    display: flex;
-    align-items: center;
-    gap: var(--fluent-spacing-xs);
-}
-
-.status-icon {
-    width: 16px;
-    height: 16px;
-    display: flex;
-    align-items: center;
-    justify-content: center;
-}
-
-.status-icon svg {
-    width: 16px;
-    height: 16px;
-    shape-rendering: geometricPrecision;
-}
-
-.status-icon-saved {
-    color: var(--fluent-success);
-}
-
-.status-icon-saving {
-    color: var(--fluent-brand-primary);
-}
-
-.status-icon-unsaved {
-    color: var(--fluent-warning);
-}
-
-/* Spinning animation for saving icon */
-@keyframes spin {
-    from {
-        transform: rotate(0deg);
-    }
-    to {
-        transform: rotate(360deg);
-    }
-}
-
-.spinning {
-    animation: spin 1s linear infinite;
-}
-
-/* Save status indicator */
-.save-status {
-    font-weight: var(--fluent-font-weight-medium);
-    transition: color var(--fluent-duration-normal) var(--fluent-easing-ease-in-out);
-}
-
-.save-status-saved {
-    color: var(--fluent-success);
-}
-
-.save-status-saving {
-    color: var(--fluent-brand-primary);
-}
-
-.save-status-unsaved {
-    color: var(--fluent-warning);
 }
 
 .status-metric {
@@ -640,21 +636,7 @@
     margin: 0 var(--fluent-spacing-xxs);
 }
 
-.status-readonly {
-    background-color: var(--fluent-bg-tertiary);
-    padding: var(--fluent-spacing-xxs) var(--fluent-spacing-s);
-    border-radius: var(--fluent-radius-small);
-    font-weight: var(--fluent-font-weight-medium);
-    text-transform: uppercase;
-    font-size: var(--fluent-font-size-100);
-    letter-spacing: 0.3px;
-}
-
 /* Read-only mode */
-.markdown-editor-container.read-only .markdown-toolbar {
-    display: none;
-}
-
 .markdown-editor-container.read-only .milkdown .editor {
     cursor: default;
 }
@@ -678,16 +660,13 @@
     margin: 16px;
 }
 
-.dark .markdown-editor-error {
-    background-color: #442726;
-    border-color: #c50f1f;
-    color: #ff6b6b;
-}
-
-/* Accessibility improvements */
-.milkdown .editor:focus {
-    outline: 2px solid var(--fluent-brand-primary);
-    outline-offset: 4px;
+/* No focus ring on the editing surface: contenteditable elements match :focus-visible
+   whenever focused (they accept keyboard input), so any outline here reappears the moment
+   the user types. The caret and container border are the focus indicators; table-cell
+   selection outlines are separate and unaffected. */
+.milkdown .editor:focus,
+.milkdown .editor:focus-visible {
+    outline: none;
 }
 
 /* ========================================
@@ -801,8 +780,64 @@
     background-color: var(--fluent-border-subtle);
 }
 
-.dropdown-category {
-    margin: 0;
+/* ========================================
+   INSERT LINK / INSERT IMAGE POPOVERS - FLUENT 2.0
+   Same visual pattern as .toolbar-dropdown (table picker) - just adds form fields.
+   ======================================== */
+.toolbar-dropdown.popover {
+    min-width: 260px;
+    padding: var(--fluent-spacing-m);
+}
+
+.toolbar-dropdown.popover .dropdown-section-header {
+    padding: 0 0 var(--fluent-spacing-s);
+}
+
+.popover-input {
+    display: block;
+    width: 100%;
+    box-sizing: border-box;
+    padding: var(--fluent-spacing-s) var(--fluent-spacing-m);
+    margin-bottom: var(--fluent-spacing-s);
+    border: 1px solid var(--fluent-border-default);
+    border-radius: var(--fluent-radius-medium);
+    font-size: var(--fluent-font-size-300);
+    font-family: var(--fluent-font-family);
+    color: var(--fluent-fg-primary);
+    background-color: var(--fluent-bg-primary);
+}
+
+.popover-input:focus {
+    outline: none;
+    border-color: var(--fluent-brand-primary);
+    box-shadow: var(--fluent-glow-focus);
+}
+
+.popover-error {
+    font-size: var(--fluent-font-size-200);
+    color: var(--fluent-error);
+    margin: 0 0 var(--fluent-spacing-s);
+}
+
+.popover-actions {
+    display: flex;
+    justify-content: flex-end;
+}
+
+.popover-submit {
+    background: var(--fluent-gradient-brand);
+    color: var(--fluent-brand-foreground);
+    border: none;
+    border-radius: var(--fluent-radius-medium);
+    padding: var(--fluent-spacing-xs) var(--fluent-spacing-l);
+    font-size: var(--fluent-font-size-300);
+    font-weight: var(--fluent-font-weight-medium);
+    cursor: pointer;
+    transition: filter 0.1s;
+}
+
+.popover-submit:hover {
+    filter: brightness(1.08);
 }
 
 /* ========================================
@@ -858,232 +893,6 @@
     color: var(--fluent-fg-secondary);
     margin-top: var(--fluent-spacing-s);
     font-weight: var(--fluent-font-weight-medium);
-}
-
-/* Search Highlight Styles */
-.search-highlight {
-    background-color: rgba(255, 235, 59, 0.4);
-    border-radius: var(--fluent-radius-small);
-}
-
-.search-highlight-current {
-    background-color: rgba(255, 152, 0, 0.6);
-    border-radius: var(--fluent-radius-small);
-    box-shadow: 0 0 0 1px rgba(255, 152, 0, 0.8);
-}
-
-/* ========================================
-   FIND & REPLACE PANEL - FLUENT 2.0
-   ======================================== */
-.find-replace-panel {
-    display: flex;
-    flex-direction: column;
-    gap: var(--fluent-spacing-s);
-    padding: var(--fluent-spacing-m) var(--fluent-spacing-xl) var(--fluent-spacing-m) var(--fluent-spacing-l);
-    background: var(--fluent-gradient-toolbar);
-    /* backdrop-filter removed for performance */
-    
-    border-bottom: 1px solid var(--fluent-border-subtle);
-    position: relative;
-    
-}
-
-@keyframes fluent-panel-slide-down {
-    from {
-        opacity: 0;
-        transform: translateY(-8px);
-    }
-    to {
-        opacity: 1;
-        transform: translateY(0);
-    }
-}
-
-.find-replace-row {
-    display: flex;
-    align-items: center;
-    gap: var(--fluent-spacing-s);
-}
-
-.find-input-wrapper {
-    position: relative;
-    flex: 1;
-    display: flex;
-    align-items: center;
-}
-
-.find-input-icon {
-    position: absolute;
-    left: var(--fluent-spacing-s);
-    color: var(--fluent-fg-secondary);
-    width: 18px;
-    height: 18px;
-    pointer-events: none;
-}
-
-.find-input-icon svg {
-    width: 18px;
-    height: 18px;
-    shape-rendering: geometricPrecision;
-}
-
-.find-input {
-    flex: 1;
-    padding: var(--fluent-spacing-s) var(--fluent-spacing-m);
-    border: 1px solid var(--fluent-border-default);
-    border-radius: var(--fluent-radius-large);
-    font-size: var(--fluent-font-size-300);
-    font-family: var(--fluent-font-family);
-    background-color: var(--fluent-bg-primary);
-    color: var(--fluent-fg-primary);
-    box-shadow: var(--fluent-shadow-2);
-    transition: background-color 0.1s, color 0.1s;
-}
-
-.find-input.with-icon {
-    padding-left: 38px;
-}
-
-.find-input:hover {
-    border-color: var(--fluent-border-strong);
-    box-shadow: var(--fluent-shadow-4);
-}
-
-.find-input:focus {
-    outline: none;
-    border-color: var(--fluent-brand-primary);
-    box-shadow: var(--fluent-glow-focus), var(--fluent-shadow-4);
-}
-
-.find-input::placeholder {
-    color: var(--fluent-fg-disabled);
-}
-
-.find-results {
-    font-size: var(--fluent-font-size-200);
-    color: var(--fluent-fg-secondary);
-    min-width: 80px;
-    text-align: right;
-    font-weight: var(--fluent-font-weight-medium);
-}
-
-/* Find Navigation Buttons */
-.find-nav-button {
-    display: inline-flex;
-    align-items: center;
-    justify-content: center;
-    width: 32px;
-    height: 32px;
-    padding: 0;
-    background-color: var(--fluent-bg-tertiary);
-    border: 1px solid var(--fluent-border-default);
-    border-radius: var(--fluent-radius-medium);
-    cursor: pointer;
-    color: var(--fluent-fg-primary);
-    transition: background-color 0.1s, color 0.1s;
-}
-
-.find-nav-button svg {
-    width: 16px;
-    height: 16px;
-}
-
-.find-nav-button:hover:not(:disabled) {
-    background-color: var(--fluent-bg-subtle);
-    border-color: var(--fluent-border-strong);
-}
-
-.find-nav-button:active:not(:disabled) {
-    background-color: var(--fluent-bg-tertiary);
-    transform: scale(0.96);
-}
-
-.find-nav-button:disabled {
-    background-color: var(--fluent-bg-secondary);
-    color: var(--fluent-fg-disabled);
-    cursor: not-allowed;
-}
-
-/* Find Action Buttons */
-.find-button {
-    padding: var(--fluent-spacing-s) var(--fluent-spacing-l);
-    background: var(--fluent-gradient-brand);
-    color: var(--fluent-brand-foreground);
-    border: none;
-    border-radius: var(--fluent-radius-circular);
-    cursor: pointer;
-    font-size: var(--fluent-font-size-200);
-    font-weight: var(--fluent-font-weight-semibold);
-    font-family: var(--fluent-font-family);
-    box-shadow: var(--fluent-shadow-4);
-    transition: background-color 0.1s, color 0.1s;
-    white-space: nowrap;
-}
-
-.find-button:hover:not(:disabled) {
-    background: var(--fluent-gradient-brand-hover);
-    box-shadow: var(--fluent-shadow-8), var(--fluent-glow-brand);
-    
-}
-
-.find-button:active:not(:disabled) {
-    background: var(--fluent-gradient-brand);
-    
-    box-shadow: var(--fluent-shadow-2);
-}
-
-.find-button:disabled {
-    background: var(--fluent-fg-disabled);
-    box-shadow: none;
-    cursor: not-allowed;
-}
-
-.find-button-secondary {
-    background: transparent;
-    color: var(--fluent-brand-primary);
-    border: 1.5px solid var(--fluent-brand-primary);
-    box-shadow: none;
-}
-
-.find-button-secondary:hover:not(:disabled) {
-    background-color: rgba(15, 108, 189, 0.1);
-    box-shadow: var(--fluent-shadow-4);
-    
-}
-
-.find-button-secondary:disabled {
-    background-color: transparent;
-    border-color: var(--fluent-fg-disabled);
-    color: var(--fluent-fg-disabled);
-}
-
-/* Find Close Button */
-.find-close {
-    position: absolute;
-    top: var(--fluent-spacing-xs);
-    right: var(--fluent-spacing-xs);
-    width: 24px;
-    height: 24px;
-    padding: 0;
-    display: flex;
-    align-items: center;
-    justify-content: center;
-    background: none;
-    border: none;
-    cursor: pointer;
-    color: var(--fluent-fg-tertiary);
-    border-radius: var(--fluent-radius-small);
-    transition: background-color 0.1s, color 0.1s;
-}
-
-.find-close:hover {
-    background-color: var(--fluent-bg-subtle);
-    color: var(--fluent-fg-primary);
-}
-
-.find-close svg {
-    width: 14px;
-    height: 14px;
 }
 
 /* ========================================
@@ -1160,43 +969,6 @@
     display: none;
 }
 
-/* Responsive Find & Replace */
-.markdown-editor-container.compact .find-replace-panel {
-    padding: 8px;
-    gap: 6px;
-}
-
-.markdown-editor-container.compact .find-input {
-    padding: 4px 8px;
-    font-size: 12px;
-}
-
-.markdown-editor-container.compact .find-button {
-    padding: 4px 8px;
-    font-size: 11px;
-}
-
-.markdown-editor-container.compact .find-nav-button {
-    width: 24px;
-    height: 24px;
-}
-
-.markdown-editor-container.very-compact .find-replace-panel {
-    padding: 6px;
-}
-
-.markdown-editor-container.very-compact .find-replace-row {
-    flex-wrap: wrap;
-}
-
-.markdown-editor-container.very-compact .find-results {
-    min-width: auto;
-    width: 100%;
-    text-align: center;
-    order: 10;
-    margin-top: 4px;
-}
-
 /* Smooth transitions for resize */
 .markdown-editor-container,
 .markdown-toolbar,
@@ -1235,22 +1007,12 @@
         min-width: 40px;
         height: 40px;
     }
-
-    .find-nav-button {
-        width: 36px;
-        height: 36px;
-    }
-
-    .find-button {
-        padding: 8px 16px;
-    }
 }
 
 /* Print styles */
 @media print {
     .markdown-toolbar,
-    .markdown-status-bar,
-    .find-replace-panel {
+    .markdown-status-bar {
         display: none !important;
     }
 
@@ -1324,15 +1086,8 @@
 
 /* Reduced motion support for accessibility */
 @media (prefers-reduced-motion: reduce) {
-    .markdown-editor-wrapper {
-        scroll-behavior: auto;
-    }
-
     .toolbar-button,
-    .find-button,
-    .find-nav-button,
     .dropdown-item,
-    .find-replace-panel,
     .toolbar-dropdown {
         transition-duration: 0.01ms !important;
         animation-duration: 0.01ms !important;

@@ -3,6 +3,17 @@ import * as React from "react";
 import { createRoot, Root } from "react-dom/client";
 import { MarkdownEditor } from "./components/MarkdownEditor";
 
+interface ResolvedProps {
+    readOnly: boolean;
+    showToolbar: boolean;
+    enableSpellCheck: boolean;
+    rows: number;
+    maxLength: number;
+    allocatedWidth: number;
+    toolbarSize: "sm" | "md" | "lg";
+    editorHeightParam: number;
+}
+
 export class MarkdownEditorControl implements ComponentFramework.StandardControl<IInputs, IOutputs> {
     private _container: HTMLDivElement;
     private _notifyOutputChanged: () => void;
@@ -12,11 +23,14 @@ export class MarkdownEditorControl implements ComponentFramework.StandardControl
     private _isValid: boolean;
     private _maxLength: number;
     private _root: Root | null;
-    private _boundHandleChange: (value: string) => void;
-    private _hasUserEdited: boolean;
-    private _initialLoadComplete: boolean;
-    private _notifyTimeoutId: ReturnType<typeof setTimeout> | null;
-    private _lastPropsSignature: string;
+    private _boundHandleChange: (value: string, stats: { words: number; chars: number }) => void;
+    private _lastReadOnly: boolean;
+    private _lastShowToolbar: boolean;
+    private _lastEnableSpellCheck: boolean;
+    private _lastRows: number;
+    private _lastWidth: number;
+    private _lastToolbarSize: "sm" | "md" | "lg";
+    private _lastEditorHeight: number;
 
     constructor() {
         this._currentValue = "";
@@ -25,10 +39,13 @@ export class MarkdownEditorControl implements ComponentFramework.StandardControl
         this._isValid = true;
         this._maxLength = 100000;
         this._root = null;
-        this._hasUserEdited = false;
-        this._initialLoadComplete = false;
-        this._notifyTimeoutId = null;
-        this._lastPropsSignature = "";
+        this._lastReadOnly = false;
+        this._lastShowToolbar = true;
+        this._lastEnableSpellCheck = true;
+        this._lastRows = 10;
+        this._lastWidth = 0;
+        this._lastToolbarSize = "md";
+        this._lastEditorHeight = 0;
         // Bind handleChange once in constructor for better performance
         this._boundHandleChange = this.handleChange.bind(this);
     }
@@ -46,11 +63,14 @@ export class MarkdownEditorControl implements ComponentFramework.StandardControl
         this._notifyOutputChanged = notifyOutputChanged;
 
         // Load initial value from bound Dataverse field
-        this._currentValue = context.parameters.value?.raw || "";
-        this._maxLength = context.parameters.maxLength?.raw || 100000;
+        this._currentValue = context.parameters.value?.raw ?? "";
 
         // Register for container resize events
         context.mode.trackContainerResize(true);
+
+        // Capture the props this initial render uses so the first updateView
+        // call correctly detects "nothing changed" instead of forcing a redundant re-render
+        this.captureLastProps(context);
 
         // Render the React component
         this.renderComponent(context);
@@ -60,68 +80,94 @@ export class MarkdownEditorControl implements ComponentFramework.StandardControl
      * Called when any value in the property bag has changed.
      */
     public updateView(context: ComponentFramework.Context<IInputs>): void {
-        // Read the current value from the bound Dataverse field
-        const newValue = context.parameters.value?.raw || "";
+        // Empty string is a legitimate value - only fall back to "" when raw is nullish
+        const newValue = context.parameters.value?.raw ?? "";
+        let needsRender = false;
 
-        // Only accept external value updates on initial load, BEFORE user has edited
-        // After user starts editing, the editor is the source of truth
-        if (!this._initialLoadComplete) {
-            // First load - accept the value from Dataverse
+        if (newValue !== this._currentValue) {
             this._currentValue = newValue;
-            this._initialLoadComplete = true;
-        } else if (!this._hasUserEdited && newValue && newValue !== this._currentValue) {
-            // Initial load might come in multiple updateView calls
-            // Only update if user hasn't edited yet
-            this._currentValue = newValue;
-        }
-        // Once user has edited, ignore all external value updates
-
-        // Update maxLength if changed
-        const newMaxLength = context.parameters.maxLength?.raw || 100000;
-        if (newMaxLength !== this._maxLength) {
-            this._maxLength = newMaxLength;
+            needsRender = true;
         }
 
-        // Build props signature to detect actual changes
-        const propsSignature = JSON.stringify({
-            value: this._currentValue,
-            readOnly: context.parameters.readOnly?.raw,
-            theme: context.parameters.theme?.raw,
-            showToolbar: context.parameters.showToolbar?.raw,
-            enableSpellCheck: context.parameters.enableSpellCheck?.raw,
-            rows: context.parameters.rows?.raw,
-            maxLength: this._maxLength,
-            width: context.mode.allocatedWidth,
-            toolbarSize: context.parameters.toolbarSize?.raw,
-            editorHeight: context.parameters.editorHeight?.raw
-        });
+        const props = this.computeProps(context);
 
-        // Only re-render if props actually changed (prevents unnecessary React re-renders)
-        if (propsSignature !== this._lastPropsSignature) {
-            this._lastPropsSignature = propsSignature;
+        if (props.readOnly !== this._lastReadOnly) {
+            this._lastReadOnly = props.readOnly;
+            needsRender = true;
+        }
+        if (props.showToolbar !== this._lastShowToolbar) {
+            this._lastShowToolbar = props.showToolbar;
+            needsRender = true;
+        }
+        if (props.enableSpellCheck !== this._lastEnableSpellCheck) {
+            this._lastEnableSpellCheck = props.enableSpellCheck;
+            needsRender = true;
+        }
+        if (props.rows !== this._lastRows) {
+            this._lastRows = props.rows;
+            needsRender = true;
+        }
+        if (props.maxLength !== this._maxLength) {
+            this._maxLength = props.maxLength;
+            needsRender = true;
+        }
+        if (props.allocatedWidth !== this._lastWidth) {
+            this._lastWidth = props.allocatedWidth;
+            needsRender = true;
+        }
+        if (props.toolbarSize !== this._lastToolbarSize) {
+            this._lastToolbarSize = props.toolbarSize;
+            needsRender = true;
+        }
+        if (props.editorHeightParam !== this._lastEditorHeight) {
+            this._lastEditorHeight = props.editorHeightParam;
+            needsRender = true;
+        }
+
+        // Skip re-rendering when nothing actually changed
+        if (needsRender) {
             this.renderComponent(context);
         }
+    }
+
+    /**
+     * Resolves the props derived from context, shared by change-detection and rendering
+     */
+    private computeProps(context: ComponentFramework.Context<IInputs>): ResolvedProps {
+        const readOnly = context.parameters.readOnly?.raw === true || context.mode.isControlDisabled;
+        const showToolbar = context.parameters.showToolbar?.raw !== false;
+        const enableSpellCheck = context.parameters.enableSpellCheck?.raw !== false;
+        const rows = context.parameters.rows?.raw || 10;
+        const maxLength = context.parameters.maxLength?.raw || 100000;
+        const allocatedWidth = context.mode.allocatedWidth;
+        const toolbarSizeParam = context.parameters.toolbarSize?.raw || "md";
+        const toolbarSize = (["sm", "md", "lg"].includes(toolbarSizeParam) ? toolbarSizeParam : "md") as "sm" | "md" | "lg";
+        const editorHeightParam = context.parameters.editorHeight?.raw || 0;
+
+        return { readOnly, showToolbar, enableSpellCheck, rows, maxLength, allocatedWidth, toolbarSize, editorHeightParam };
+    }
+
+    /**
+     * Stores the resolved props as the "last rendered" baseline for change detection
+     */
+    private captureLastProps(context: ComponentFramework.Context<IInputs>): void {
+        const props = this.computeProps(context);
+        this._lastReadOnly = props.readOnly;
+        this._lastShowToolbar = props.showToolbar;
+        this._lastEnableSpellCheck = props.enableSpellCheck;
+        this._lastRows = props.rows;
+        this._maxLength = props.maxLength;
+        this._lastWidth = props.allocatedWidth;
+        this._lastToolbarSize = props.toolbarSize;
+        this._lastEditorHeight = props.editorHeightParam;
     }
 
     /**
      * Renders the React component
      */
     private renderComponent(context: ComponentFramework.Context<IInputs>): void {
-        const readOnly = context.parameters.readOnly?.raw === true || context.mode.isControlDisabled;
-        const themeValue = context.parameters.theme?.raw || "light";
-        const theme = ["light", "dark", "auto", "high-contrast"].includes(themeValue)
-            ? (themeValue as "light" | "dark" | "auto" | "high-contrast")
-            : "light";
-        const showToolbar = context.parameters.showToolbar?.raw !== false;
-        const enableSpellCheck = context.parameters.enableSpellCheck?.raw !== false;
-        const rowsParam = context.parameters.rows?.raw;
-        const rows = rowsParam || 10;
-        const editorHeightParam = context.parameters.editorHeight?.raw;
-        const toolbarSizeParam = context.parameters.toolbarSize?.raw || "md";
-        const toolbarSize = (["sm", "md", "lg"].includes(toolbarSizeParam) ? toolbarSizeParam : "md") as "sm" | "md" | "lg";
-
-        // Get allocated dimensions from context
-        const allocatedWidth = context.mode.allocatedWidth;
+        const { readOnly, showToolbar, enableSpellCheck, maxLength, allocatedWidth, toolbarSize, rows, editorHeightParam } =
+            this.computeProps(context);
 
         // Calculate height: editorHeight (pixels) takes precedence over rows
         const height = editorHeightParam && editorHeightParam > 0
@@ -140,10 +186,9 @@ export class MarkdownEditorControl implements ComponentFramework.StandardControl
                 value: this._currentValue,
                 onChange: this._boundHandleChange,
                 readOnly: readOnly,
-                theme: theme,
                 showToolbar: showToolbar,
                 enableSpellCheck: enableSpellCheck,
-                maxLength: this._maxLength,
+                maxLength: maxLength,
                 height: height,
                 width: width,
                 toolbarSize: toolbarSize
@@ -152,29 +197,23 @@ export class MarkdownEditorControl implements ComponentFramework.StandardControl
     }
 
     /**
-     * Handles markdown content change from the editor
+     * Handles markdown content change from the editor.
+     * Only invoked on flush (blur/unmount), so eager, synchronous notification is correct.
+     * Stats arrive pre-computed from the component (same doc.textContent-based metric used by
+     * the status bar) rather than being recomputed here from the serialized markdown, so the
+     * word/character outputs can never disagree with what the user sees on screen.
      */
-    private handleChange(value: string): void {
-        // Mark that user has edited - this prevents external updates from overwriting
-        this._hasUserEdited = true;
+    private handleChange(value: string, stats: { words: number; chars: number }): void {
         this._currentValue = value;
-
-        // Update statistics using regex (more efficient than split/filter)
-        const wordMatches = value.match(/\S+/g);
-        this._wordCount = wordMatches ? wordMatches.length : 0;
-        this._characterCount = value.length;
+        this._wordCount = stats.words;
+        this._characterCount = stats.chars;
 
         // Validate against max length
         this._isValid = this._characterCount <= this._maxLength;
 
-        // Debounce notification - 50ms batches rapid keystrokes while maintaining data safety
-        if (this._notifyTimeoutId) {
-            clearTimeout(this._notifyTimeoutId);
-        }
-        this._notifyTimeoutId = setTimeout(() => {
-            this._notifyOutputChanged();
-            this._notifyTimeoutId = null;
-        }, 50);
+        // Notify synchronously - handleChange only fires on flush (blur/unmount),
+        // so there is no per-keystroke storm to debounce anymore.
+        this._notifyOutputChanged();
     }
 
     /**
@@ -193,12 +232,10 @@ export class MarkdownEditorControl implements ComponentFramework.StandardControl
      * Cleanup when control is removed
      */
     public destroy(): void {
-        // Clean up debounce timeout
-        if (this._notifyTimeoutId) {
-            clearTimeout(this._notifyTimeoutId);
-            this._notifyTimeoutId = null;
-        }
         if (this._root) {
+            // Unmounting synchronously runs the component's cleanup effects, which
+            // flush any pending edit through onUpdate -> handleChange -> notifyOutputChanged
+            // before this method returns.
             this._root.unmount();
             this._root = null;
         }

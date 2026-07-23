@@ -1,19 +1,17 @@
 import { useCallback } from 'react';
 import { Editor, editorViewCtx } from '@milkdown/core';
-import { callCommand } from '@milkdown/kit/utils';
+import { callCommand } from '@milkdown/utils';
 import {
     toggleStrongCommand,
     toggleEmphasisCommand,
     wrapInHeadingCommand,
     wrapInBulletListCommand,
     wrapInOrderedListCommand,
-    insertImageCommand,
     wrapInBlockquoteCommand,
     insertHrCommand
 } from '@milkdown/preset-commonmark';
 import { insertTableCommand, toggleStrikethroughCommand } from '@milkdown/preset-gfm';
 import { redoCommand, undoCommand } from '@milkdown/plugin-history';
-import { validateLinkUrl, validateImageUrl } from '../utils/security';
 import { handleError } from '../utils/errorHandler';
 import { TABLE_MIN_ROWS } from '../utils/constants';
 
@@ -34,16 +32,20 @@ export interface EditorCommands {
     insertHorizontalRule: () => void;
     insertBulletList: () => void;
     insertOrderedList: () => void;
-    insertLink: () => void;
-    insertImage: () => void;
     insertCode: () => void;
     insertTable: (rows: number, cols: number) => void;
 }
 
 export function useEditorCommands({ getEditor }: UseEditorCommandsProps): EditorCommands {
+    // Centralizes focus return (Decision item E): every toolbar command that goes through
+    // executeCommand refocuses the ProseMirror view afterward, so the caret stays visible and
+    // usable instead of being left on the toolbar button that was clicked.
     const executeCommand = useCallback((command: Parameters<typeof callCommand>[0], payload?: unknown) => {
         try {
-            getEditor()?.action(callCommand(command, payload));
+            const editor = getEditor();
+            editor?.action(callCommand(command, payload));
+            const view = editor?.ctx.get(editorViewCtx);
+            view?.focus();
         } catch (error) {
             handleError(error, { component: 'useEditorCommands', action: 'executeCommand' });
         }
@@ -93,62 +95,6 @@ export function useEditorCommands({ getEditor }: UseEditorCommandsProps): Editor
         executeCommand(wrapInOrderedListCommand.key);
     }, [executeCommand]);
 
-    const insertLink = useCallback(() => {
-        const editor = getEditor();
-        if (!editor) return;
-
-        try {
-            const view = editor.ctx.get(editorViewCtx);
-            if (!view) return;
-
-            const { state, dispatch } = view;
-            const { selection } = state;
-            const selectedText = state.doc.textBetween(selection.from, selection.to);
-
-            const url = window.prompt('Enter URL:', 'https://');
-            if (!url) return;
-
-            // Validate URL for security
-            const validation = validateLinkUrl(url);
-            if (!validation.valid) {
-                window.alert(validation.error);
-                return;
-            }
-
-            const defaultText = selectedText || url;
-            const linkText = window.prompt('Enter link text (or leave empty to show URL):', defaultText);
-            if (linkText === null) return;
-
-            const displayText = linkText.trim() || url;
-            const linkMark = state.schema.marks.link;
-
-            if (linkMark) {
-                const mark = linkMark.create({ href: validation.sanitized || url, title: '' });
-                const textNode = state.schema.text(displayText, [mark]);
-                const tr = state.tr.replaceSelectionWith(textNode, false);
-                dispatch(tr);
-                view.focus();
-            }
-        } catch (error) {
-            handleError(error, { component: 'useEditorCommands', action: 'insertLink' });
-        }
-    }, [getEditor]);
-
-    const insertImage = useCallback(() => {
-        const url = window.prompt('Enter image URL:', 'https://');
-        if (!url) return;
-
-        // Validate URL for security
-        const validation = validateImageUrl(url);
-        if (!validation.valid) {
-            window.alert(validation.error);
-            return;
-        }
-
-        const alt = window.prompt('Enter alt text:', 'image') || 'image';
-        executeCommand(insertImageCommand.key, { src: validation.sanitized || url, alt });
-    }, [executeCommand]);
-
     const insertCode = useCallback(() => {
         const editor = getEditor();
         if (!editor) return;
@@ -165,6 +111,7 @@ export function useEditorCommands({ getEditor }: UseEditorCommandsProps): Editor
                     );
                     const tr = state.tr.replaceSelectionWith(codeBlock);
                     dispatch(tr);
+                    view.focus();
                 }
             }
         } catch (error) {
@@ -192,8 +139,6 @@ export function useEditorCommands({ getEditor }: UseEditorCommandsProps): Editor
         insertHorizontalRule,
         insertBulletList,
         insertOrderedList,
-        insertLink,
-        insertImage,
         insertCode,
         insertTable
     };

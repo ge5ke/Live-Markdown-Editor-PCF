@@ -1,6 +1,6 @@
 {
   "name": "lmd-pcf",
-  "version": "2.0.0",
+  "version": "3.0.0",
   "description": "Lightweight Markdown editor PCF control with GFM support, Lucide icons, and configurable toolbar sizing for Power Apps.",
   "keywords": [
     "powerapps",
@@ -9,26 +9,18 @@
     "markdown",
     "markdown-editor",
     "react",
-    "milkdown",
     "gfm",
     "github-flavored-markdown",
     "dataverse"
   ],
   "author": "HAP",
   "license": "MIT",
-  "repository": {
-    "type": "git",
-    "url": "git+https://github.com/Sahib-Sawhney-WH/Live-Markdown-Editor-PCF.git"
-  },
-  "bugs": {
-    "url": "https://github.com/Sahib-Sawhney-WH/Live-Markdown-Editor-PCF/issues"
-  },
-  "homepage": "https://github.com/Sahib-Sawhney-WH/Live-Markdown-Editor-PCF#readme",
   "sideEffects": [
     "*.css"
   ],
   "scripts": {
     "build": "pcf-scripts build",
+    "build:prod": "pcf-scripts build --buildMode production",
     "clean": "pcf-scripts clean",
     "lint": "pcf-scripts lint",
     "lint:fix": "pcf-scripts lint fix",
@@ -40,11 +32,14 @@
   "dependencies": {
     "@milkdown/core": "^7.17.1",
     "@milkdown/ctx": "^7.17.1",
+    "@milkdown/plugin-clipboard": "^7.17.1",
+    "@milkdown/plugin-history": "^7.17.1",
     "@milkdown/plugin-listener": "^7.17.1",
     "@milkdown/preset-commonmark": "^7.17.1",
+    "@milkdown/preset-gfm": "^7.17.1",
     "@milkdown/prose": "^7.17.1",
     "@milkdown/react": "^7.17.1",
-    "@milkdown/theme-nord": "^7.17.1",
+    "@milkdown/utils": "^7.17.1",
     "lucide-react": "^0.468.0",
     "react": "^19.2.0",
     "react-dom": "^19.2.0"
