@@ -1,7 +1,7 @@
 {
-  "name": "markdown-editor-pcf",
-  "version": "1.6.1",
-  "description": "A feature-rich Markdown editor PCF control with GitHub Flavored Markdown support, built using React and Milkdown for Power Apps.",
+  "name": "lmd-pcf",
+  "version": "2.0.0",
+  "description": "Lightweight Markdown editor PCF control with GFM support, Lucide icons, and configurable toolbar sizing for Power Apps.",
   "keywords": [
     "powerapps",
     "pcf",
@@ -14,7 +14,7 @@
     "github-flavored-markdown",
     "dataverse"
   ],
-  "author": "RSM",
+  "author": "HAP",
   "license": "MIT",
   "repository": {
     "type": "git",

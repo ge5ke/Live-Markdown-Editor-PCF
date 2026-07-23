@@ -2,32 +2,32 @@
 <ImportExportXml version="9.1.0.643" SolutionPackageVersion="9.1" languagecode="1033" generatedBy="CrmLive" xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance">
   <SolutionManifest>
     <!-- Unique Name of Cds Solution-->
-    <UniqueName>RSMMarkdownEditor</UniqueName>
+    <UniqueName>HAPLightweightMarkdownEditor</UniqueName>
     <LocalizedNames>
       <!-- Localized Solution Name in language code -->
-      <LocalizedName description="RSM Markdown Editor" languagecode="1033" />
+      <LocalizedName description="LMD - Lightweight Markdown Editor" languagecode="1033" />
     </LocalizedNames>
     <Descriptions>
-      <Description description="A feature-rich WYSIWYG Markdown editor PCF control with Fluent 2.0 design, GitHub Flavored Markdown support, and Dataverse integration." languagecode="1033" />
+      <Description description="Lightweight WYSIWYG Markdown editor PCF control with GFM support, Lucide icons, configurable toolbar sizing, and Dataverse integration." languagecode="1033" />
     </Descriptions>
-    <Version>1.6.1</Version>
+    <Version>2.0.0</Version>
     <!-- Solution Package Type: Unmanaged(0)/Managed(1)/Both(2)-->
     <Managed>2</Managed>
     <Publisher>
       <!-- Unique Publisher Name of Cds Solution -->
-      <UniqueName>RSM</UniqueName>
+      <UniqueName>hap</UniqueName>
       <LocalizedNames>
         <!-- Localized Cds Publisher Name in language code-->
-        <LocalizedName description="RSM" languagecode="1033" />
+        <LocalizedName description="HAP" languagecode="1033" />
       </LocalizedNames>
       <Descriptions>
         <!-- Description of Cds Publisher in language code -->
-        <Description description="RSM" languagecode="1033" />
+        <Description description="HAP" languagecode="1033" />
       </Descriptions>
       <EMailAddress xsi:nil="true"></EMailAddress>
       <SupportingWebsiteUrl xsi:nil="true"></SupportingWebsiteUrl>
       <!-- Customization Prefix for the Cds Publisher-->
-      <CustomizationPrefix>rsm</CustomizationPrefix>
+      <CustomizationPrefix>hap</CustomizationPrefix>
       <!-- Derived Option Value Prefix for the Customization Prefix of Cds Publisher -->
       <CustomizationOptionValuePrefix>62986</CustomizationOptionValuePrefix>
       <Addresses>
