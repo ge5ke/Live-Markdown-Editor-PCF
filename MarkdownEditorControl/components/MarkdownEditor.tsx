@@ -452,7 +452,9 @@ const EditorComponent: React.FC<Omit<MarkdownEditorProps, 'onChange'> & {
     // Validation errors render inline in the popover (never window.alert) - see validateLinkUrl.
     const handleInsertLink = useCallback(() => {
         const validation = validateLinkUrl(linkUrl);
-        if (!validation.valid) {
+        // sanitized is always present when valid is true, but the extra check keeps the
+        // compiler-narrowed type a plain string and guarantees the raw linkUrl is never used.
+        if (!validation.valid || !validation.sanitized) {
             setLinkError(validation.error ?? 'Invalid URL');
             return;
         }
@@ -465,7 +467,7 @@ const EditorComponent: React.FC<Omit<MarkdownEditorProps, 'onChange'> & {
             if (!view) return;
 
             const { state, dispatch } = view;
-            const href = validation.sanitized || linkUrl;
+            const href = validation.sanitized;
             const displayText = linkText.trim() || href;
             const linkMark = state.schema.marks.link;
 
@@ -494,13 +496,15 @@ const EditorComponent: React.FC<Omit<MarkdownEditorProps, 'onChange'> & {
     // Validation errors render inline in the popover (never window.alert) - see validateImageUrl.
     const handleInsertImage = useCallback(() => {
         const validation = validateImageUrl(imageUrl);
-        if (!validation.valid) {
+        // sanitized is always present when valid is true, but the extra check keeps the
+        // compiler-narrowed type a plain string and guarantees the raw imageUrl is never used.
+        if (!validation.valid || !validation.sanitized) {
             setImageError(validation.error ?? 'Invalid image URL');
             return;
         }
 
         executeCommand(insertImageCommand.key, {
-            src: validation.sanitized || imageUrl,
+            src: validation.sanitized,
             alt: imageAlt.trim() || 'image'
         });
         // executeCommand already refocuses the view, but do so explicitly too since insertion

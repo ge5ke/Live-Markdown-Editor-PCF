@@ -16,14 +16,6 @@ export const TABLE_GRID_SIZE = 6;           // 6x6 table picker grid
 export const TABLE_MIN_ROWS = 2;            // Minimum rows (header + 1 data row)
 export const TABLE_MIN_COLS = 1;            // Minimum columns
 
-// Dangerous URL protocols to block
-export const DANGEROUS_PROTOCOLS = [
-    'javascript:',
-    'vbscript:',
-    'data:text/html',
-    'data:application'
-];
-
 // Safe protocols for links
 export const SAFE_LINK_PROTOCOLS = [
     'http:',
