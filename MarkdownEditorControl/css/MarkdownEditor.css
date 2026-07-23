@@ -708,6 +708,66 @@
 }
 
 /* ========================================
+   INSERT LINK / INSERT IMAGE POPOVERS - FLUENT 2.0
+   Same visual pattern as .toolbar-dropdown (table picker) - just adds form fields.
+   ======================================== */
+.toolbar-dropdown.popover {
+    min-width: 260px;
+    padding: var(--fluent-spacing-m);
+}
+
+.toolbar-dropdown.popover .dropdown-section-header {
+    padding: 0 0 var(--fluent-spacing-s);
+}
+
+.popover-input {
+    display: block;
+    width: 100%;
+    box-sizing: border-box;
+    padding: var(--fluent-spacing-s) var(--fluent-spacing-m);
+    margin-bottom: var(--fluent-spacing-s);
+    border: 1px solid var(--fluent-border-default);
+    border-radius: var(--fluent-radius-medium);
+    font-size: var(--fluent-font-size-300);
+    font-family: var(--fluent-font-family);
+    color: var(--fluent-fg-primary);
+    background-color: var(--fluent-bg-primary);
+}
+
+.popover-input:focus {
+    outline: none;
+    border-color: var(--fluent-brand-primary);
+    box-shadow: var(--fluent-glow-focus);
+}
+
+.popover-error {
+    font-size: var(--fluent-font-size-200);
+    color: var(--fluent-error);
+    margin: 0 0 var(--fluent-spacing-s);
+}
+
+.popover-actions {
+    display: flex;
+    justify-content: flex-end;
+}
+
+.popover-submit {
+    background: var(--fluent-gradient-brand);
+    color: var(--fluent-brand-foreground);
+    border: none;
+    border-radius: var(--fluent-radius-medium);
+    padding: var(--fluent-spacing-xs) var(--fluent-spacing-l);
+    font-size: var(--fluent-font-size-300);
+    font-weight: var(--fluent-font-weight-medium);
+    cursor: pointer;
+    transition: filter 0.1s;
+}
+
+.popover-submit:hover {
+    filter: brightness(1.08);
+}
+
+/* ========================================
    TABLE SIZE PICKER - FLUENT 2.0
    ======================================== */
 .table-dropdown {

@@ -8,12 +8,13 @@ import { listener, listenerCtx } from '@milkdown/plugin-listener';
 import { Editor, rootCtx, defaultValueCtx, editorViewCtx, editorViewOptionsCtx, parserCtx, serializerCtx } from '@milkdown/core';
 import { insertImageCommand } from '@milkdown/preset-commonmark';
 import { history } from '@milkdown/plugin-history';
+import { clipboard } from '@milkdown/plugin-clipboard';
 import { $prose } from '@milkdown/utils';
 import { Plugin, PluginKey } from '@milkdown/prose/state';
 import '@milkdown/theme-nord/style.css';
 
 // Import security utilities
-import { validateImageSize } from '../utils/security';
+import { validateImageSize, validateLinkUrl, validateImageUrl } from '../utils/security';
 import { handleError } from '../utils/errorHandler';
 import {
     DEBOUNCE_SERIALIZE_MS,
@@ -98,6 +99,7 @@ const EditorComponent: React.FC<Omit<MarkdownEditorProps, 'onChange'> & {
     onUpdate,
     readOnly = false,
     showToolbar = true,
+    enableSpellCheck = true,
     maxLength = 100000,
     height,
     width,
@@ -112,6 +114,15 @@ const EditorComponent: React.FC<Omit<MarkdownEditorProps, 'onChange'> & {
     const [showTablePicker, setShowTablePicker] = useState(false);
     const [tableSize, setTableSize] = useState<{ rows: number; cols: number }>({ rows: 3, cols: 3 });
     const [hoveredCell, setHoveredCell] = useState<{ row: number; col: number }>({ row: 0, col: 0 });
+    // Insert Link / Insert Image popovers (replace window.prompt/window.alert). Only one is ever
+    // open at a time, alongside the table picker.
+    const [activePopover, setActivePopover] = useState<'link' | 'image' | null>(null);
+    const [linkUrl, setLinkUrl] = useState('');
+    const [linkText, setLinkText] = useState('');
+    const [linkError, setLinkError] = useState<string | null>(null);
+    const [imageUrl, setImageUrl] = useState('');
+    const [imageAlt, setImageAlt] = useState('');
+    const [imageError, setImageError] = useState<string | null>(null);
     const editorRef = useRef<Editor | null>(null);
     const currentMarkdownRef = useRef<string>(value);
     // True whenever the doc has unflushed edits (set synchronously on every ProseMirror update,
@@ -169,10 +180,16 @@ const EditorComponent: React.FC<Omit<MarkdownEditorProps, 'onChange'> & {
                     // ProseMirror-level non-editability (not CSS): editable is re-evaluated by
                     // ProseMirror on every relevant check, so reading readOnlyRef here means a
                     // later readOnly change (applied via view.setProps below) takes effect
-                    // immediately without recreating the editor.
+                    // immediately without recreating the editor. spellcheck/aria-label are set
+                    // here from the initial props and kept current by the effect below.
                     ctx.update(editorViewOptionsCtx, (prev) => ({
                         ...prev,
-                        editable: () => !readOnlyRef.current
+                        editable: () => !readOnlyRef.current,
+                        attributes: {
+                            ...prev.attributes,
+                            spellcheck: String(enableSpellCheck),
+                            'aria-label': 'Markdown editor'
+                        }
                     }));
                 })
                 .config((ctx) => {
@@ -218,6 +235,7 @@ const EditorComponent: React.FC<Omit<MarkdownEditorProps, 'onChange'> & {
                 .use(gfm)
                 .use(history)
                 .use(listener)
+                .use(clipboard)
                 .use(createMaxLengthGuardPlugin(maxLengthRef));
 
             editorRef.current = editor;
@@ -253,6 +271,24 @@ const EditorComponent: React.FC<Omit<MarkdownEditorProps, 'onChange'> & {
             handleError(error, { component: 'MarkdownEditor', action: 'applyReadOnly' });
         }
     }, [readOnly, get]);
+
+    // Apply spellcheck changes to the live view the same way readOnly is applied above.
+    useEffect(() => {
+        const editor = get?.();
+        if (!editor) return;
+
+        try {
+            const view = editor.ctx.get(editorViewCtx);
+            view?.setProps({
+                attributes: {
+                    spellcheck: String(enableSpellCheck),
+                    'aria-label': 'Markdown editor'
+                }
+            });
+        } catch (error) {
+            handleError(error, { component: 'MarkdownEditor', action: 'applySpellCheck' });
+        }
+    }, [enableSpellCheck, get]);
 
     // Flush any pending debounced serialize and, if the doc has unflushed edits, notify the
     // parent. Synchronous (no setTimeout) so it is safe to call from a blur handler and from
@@ -369,7 +405,7 @@ const EditorComponent: React.FC<Omit<MarkdownEditorProps, 'onChange'> & {
     const {
         insertHeading, clearHeading, toggleBold, toggleItalic, toggleStrikethrough,
         handleUndo, handleRedo, insertBlockquote, insertHorizontalRule,
-        insertBulletList, insertOrderedList, insertLink, insertImage, insertCode,
+        insertBulletList, insertOrderedList, insertCode,
         insertTable: insertTableCommand_fn, executeCommand
     } = editorCommands;
 
@@ -378,6 +414,7 @@ const EditorComponent: React.FC<Omit<MarkdownEditorProps, 'onChange'> & {
 
     // Toggle table picker visibility
     const toggleTablePicker = () => {
+        setActivePopover(null);
         setShowTablePicker(!showTablePicker);
         setHoveredCell({ row: 0, col: 0 });
     };
@@ -389,6 +426,89 @@ const EditorComponent: React.FC<Omit<MarkdownEditorProps, 'onChange'> & {
         setHoveredCell({ row: 0, col: 0 });
     };
 
+    // Open the Insert Link popover, prefilling the display-text field with the current
+    // selection (matches the old prompt flow's default) so the toolbar button alone triggers it.
+    const openLinkPopover = useCallback(() => {
+        let selectedText = '';
+        const editor = getEditor();
+        if (editor) {
+            try {
+                const view = editor.ctx.get(editorViewCtx);
+                if (view) {
+                    const { selection, doc } = view.state;
+                    selectedText = doc.textBetween(selection.from, selection.to);
+                }
+            } catch (error) {
+                handleError(error, { component: 'MarkdownEditor', action: 'openLinkPopover' });
+            }
+        }
+        setLinkUrl('https://');
+        setLinkText(selectedText);
+        setLinkError(null);
+        setShowTablePicker(false);
+        setActivePopover((prev) => (prev === 'link' ? null : 'link'));
+    }, [getEditor]);
+
+    // Validation errors render inline in the popover (never window.alert) - see validateLinkUrl.
+    const handleInsertLink = useCallback(() => {
+        const validation = validateLinkUrl(linkUrl);
+        if (!validation.valid) {
+            setLinkError(validation.error ?? 'Invalid URL');
+            return;
+        }
+
+        const editor = getEditor();
+        if (!editor) return;
+
+        try {
+            const view = editor.ctx.get(editorViewCtx);
+            if (!view) return;
+
+            const { state, dispatch } = view;
+            const href = validation.sanitized || linkUrl;
+            const displayText = linkText.trim() || href;
+            const linkMark = state.schema.marks.link;
+
+            if (linkMark) {
+                const mark = linkMark.create({ href, title: '' });
+                const textNode = state.schema.text(displayText, [mark]);
+                const tr = state.tr.replaceSelectionWith(textNode, false);
+                dispatch(tr);
+            }
+
+            setActivePopover(null);
+            view.focus();
+        } catch (error) {
+            handleError(error, { component: 'MarkdownEditor', action: 'insertLink' });
+        }
+    }, [getEditor, linkUrl, linkText]);
+
+    const openImagePopover = useCallback(() => {
+        setImageUrl('https://');
+        setImageAlt('');
+        setImageError(null);
+        setShowTablePicker(false);
+        setActivePopover((prev) => (prev === 'image' ? null : 'image'));
+    }, []);
+
+    // Validation errors render inline in the popover (never window.alert) - see validateImageUrl.
+    const handleInsertImage = useCallback(() => {
+        const validation = validateImageUrl(imageUrl);
+        if (!validation.valid) {
+            setImageError(validation.error ?? 'Invalid image URL');
+            return;
+        }
+
+        executeCommand(insertImageCommand.key, {
+            src: validation.sanitized || imageUrl,
+            alt: imageAlt.trim() || 'image'
+        });
+        // executeCommand already refocuses the view, but do so explicitly too since insertion
+        // itself may fail silently (e.g. no image node at schema) and popover close should not
+        // depend on that.
+        setActivePopover(null);
+    }, [executeCommand, imageUrl, imageAlt]);
+
     const copyToClipboard = async () => {
         try {
             await navigator.clipboard.writeText(currentMarkdownRef.current);
@@ -399,163 +519,105 @@ const EditorComponent: React.FC<Omit<MarkdownEditorProps, 'onChange'> & {
         }
     };
 
-    // Close dropdowns when clicking outside
+    // Close dropdowns (table picker + link/image popovers) on outside click or Escape. Single
+    // shared mechanism for all three - extend here rather than adding a duplicate effect.
     useEffect(() => {
+        if (!showTablePicker && activePopover === null) return;
+
         const handleClickOutside = (e: MouseEvent) => {
             if (containerRef.current && !containerRef.current.contains(e.target as Node)) {
                 setShowTablePicker(false);
+                setActivePopover(null);
             }
         };
-        if (showTablePicker) {
-            document.addEventListener('mousedown', handleClickOutside);
-            return () => document.removeEventListener('mousedown', handleClickOutside);
-        }
-    }, [showTablePicker]);
-
-    // Helper function to detect if text looks like markdown
-    const looksLikeMarkdown = (text: string): boolean => {
-        // Check for common markdown patterns
-        const markdownPatterns = [
-            /^#{1,6}\s+/m,           // Headers: # Header
-            /\*\*[^*]+\*\*/,         // Bold: **text**
-            /\*[^*]+\*/,             // Italic: *text*
-            /^\s*[-*+]\s+/m,         // Unordered lists: - item
-            /^\s*\d+\.\s+/m,         // Ordered lists: 1. item
-            /\[.+\]\(.+\)/,          // Links: [text](url)
-            /!\[.*\]\(.+\)/,         // Images: ![alt](url)
-            /```[\s\S]*```/,         // Code blocks: ```code```
-            /`[^`]+`/,               // Inline code: `code`
-            /^\|.+\|$/m,             // Tables: | cell |
-            /^>\s+/m,                // Blockquotes: > quote
-            /^---$/m,                // Horizontal rules
-            /~~[^~]+~~/,             // Strikethrough: ~~text~~
-            /^\s*-\s*\[[ x]\]/m,     // Task lists: - [ ] or - [x]
-        ];
-
-        // Count how many patterns match
-        let matchCount = 0;
-        for (const pattern of markdownPatterns) {
-            if (pattern.test(text)) {
-                matchCount++;
+        const handleKeyDown = (e: KeyboardEvent) => {
+            if (e.key === 'Escape') {
+                setShowTablePicker(false);
+                setActivePopover(null);
             }
-        }
+        };
 
-        // Consider it markdown if at least 2 patterns match, or if it has headers/code blocks
-        return matchCount >= 2 || /^#{1,6}\s+/m.test(text) || /```[\s\S]*```/.test(text);
-    };
+        document.addEventListener('mousedown', handleClickOutside);
+        document.addEventListener('keydown', handleKeyDown);
+        return () => {
+            document.removeEventListener('mousedown', handleClickOutside);
+            document.removeEventListener('keydown', handleKeyDown);
+        };
+    }, [showTablePicker, activePopover]);
 
-    // Handle paste events for images and markdown
+    // Handle paste events for images. Markdown paste is now handled by @milkdown/plugin-clipboard
+    // (registered in the .use() chain above), which parses pasted markdown/HTML properly instead
+    // of the previous heuristic-based looksLikeMarkdown() detector.
     const handlePaste = useCallback((e: Event) => {
         const clipboardEvent = e as ClipboardEvent;
         const items = clipboardEvent.clipboardData?.items;
         if (!items) return;
 
-        const itemsArray = Array.from(items);
+        for (const item of Array.from(items)) {
+            if (!item.type.startsWith('image/')) continue;
 
-        // First, check for images
-        for (const item of itemsArray) {
-            if (item.type.startsWith('image/')) {
-                // Stop the event completely to prevent double paste
-                e.preventDefault();
-                e.stopPropagation();
+            // Only claim the event once we actually have a file to handle - inspecting
+            // clipboardData.items does not by itself mean getAsFile() will succeed. Calling
+            // preventDefault/stopPropagation before that check would swallow the paste (e.g.
+            // falling through to plugin-clipboard's markdown handling) even when there is
+            // nothing here to insert.
+            const file = item.getAsFile();
+            if (!file) continue;
 
-                const file = item.getAsFile();
-                if (!file) continue;
-
-                // Validate image size
-                const sizeValidation = validateImageSize(file);
-                if (!sizeValidation.valid) {
-                    window.alert(sizeValidation.error);
-                    return;
-                }
-
-                try {
-                    // Convert image to base64 data URL
-                    const reader = new FileReader();
-                    reader.onload = (event) => {
-                        const dataUrl = event.target?.result as string;
-                        if (dataUrl) {
-                            // Insert the image into the editor
-                            executeCommand(insertImageCommand.key, {
-                                src: dataUrl,
-                                alt: file.name || 'pasted-image'
-                            });
-                        }
-                    };
-                    reader.readAsDataURL(file);
-                } catch (error) {
-                    handleError(error, { component: 'MarkdownEditor', action: 'pasteImage' });
-                }
-                return; // Image handled, exit
-            }
-        }
-
-        // Check for text that looks like markdown
-        const textData = clipboardEvent.clipboardData?.getData('text/plain');
-        if (textData && looksLikeMarkdown(textData)) {
             e.preventDefault();
+            e.stopPropagation();
+
+            // Validate image size
+            const sizeValidation = validateImageSize(file);
+            if (!sizeValidation.valid) {
+                // Mid-paste alert is intentional: there is no anchor UI to render an inline
+                // error against at this point in the flow.
+                window.alert(sizeValidation.error);
+                return;
+            }
 
             try {
-                const editor = get?.();
-                if (!editor) return;
-
-                const view = editor.ctx.get(editorViewCtx);
-                const parser = editor.ctx.get(parserCtx);
-
-                if (view && parser) {
-                    const { state, dispatch } = view;
-
-                    // Check if editor is empty or nearly empty
-                    const currentContent = currentMarkdownRef.current.trim();
-                    const isEmptyOrMinimal = currentContent === '' || currentContent.length < 10;
-
-                    // Parse the markdown into a ProseMirror document
-                    const doc = parser(textData);
-
-                    if (doc) {
-                        if (isEmptyOrMinimal) {
-                            // Replace entire document content for empty editors
-                            const tr = state.tr.replaceWith(0, state.doc.content.size, doc.content);
-                            dispatch(tr);
-                        } else {
-                            // For non-empty editors, try to insert at cursor
-                            // First, check if we're at the start of a block
-                            const { $from } = state.selection;
-                            const atBlockStart = $from.parentOffset === 0;
-
-                            if (atBlockStart && doc.content.childCount > 0) {
-                                // Insert block content properly
-                                const { from, to } = state.selection;
-                                const tr = state.tr.replaceWith(from, to, doc.content);
-                                dispatch(tr);
-                            } else {
-                                // Insert as text slice with proper handling
-                                const { from, to } = state.selection;
-                                const tr = state.tr.replaceWith(from, to, doc.content);
-                                dispatch(tr);
-                            }
-                        }
+                // Convert image to base64 data URL
+                const reader = new FileReader();
+                reader.onload = (event) => {
+                    const dataUrl = event.target?.result as string;
+                    if (dataUrl) {
+                        // Insert the image into the editor
+                        executeCommand(insertImageCommand.key, {
+                            src: dataUrl,
+                            alt: file.name || 'pasted-image'
+                        });
                     }
-                }
+                };
+                reader.readAsDataURL(file);
             } catch (error) {
-                handleError(error, { component: 'MarkdownEditor', action: 'pasteMarkdown' }, 'warning');
-                // If parsing fails, let default paste behavior handle it
+                handleError(error, { component: 'MarkdownEditor', action: 'pasteImage' });
             }
+            return; // Image handled, exit
         }
-    }, [executeCommand, get]);
+    }, [executeCommand]);
 
-    // Attach paste handler to editor (capture phase to intercept before ProseMirror). Never
-    // attached when readOnly: nothing can be pasted into a non-editable editor.
+    // Attach the paste handler to the ProseMirror root DOM node itself (not the whole
+    // container), so it never intercepts paste into the popover URL/text inputs. Capture phase
+    // to intercept before ProseMirror/plugin-clipboard sees it. Never attached when readOnly:
+    // nothing can be pasted into a non-editable editor.
     useEffect(() => {
         if (readOnly) return;
 
-        const container = containerRef.current;
-        if (!container) return;
+        const editor = get?.();
+        if (!editor) return;
 
-        // Use capture phase to handle paste before ProseMirror does
-        container.addEventListener('paste', handlePaste, true);
-        return () => container.removeEventListener('paste', handlePaste, true);
-    }, [handlePaste, readOnly]);
+        let proseMirrorDom: HTMLElement | undefined;
+        try {
+            proseMirrorDom = editor.ctx.get(editorViewCtx)?.dom;
+        } catch (error) {
+            handleError(error, { component: 'MarkdownEditor', action: 'attachPasteListener' });
+        }
+        if (!proseMirrorDom) return;
+
+        proseMirrorDom.addEventListener('paste', handlePaste, true);
+        return () => proseMirrorDom?.removeEventListener('paste', handlePaste, true);
+    }, [handlePaste, readOnly, get]);
 
     // Determine responsive class based on width
     const getResponsiveClass = () => {
@@ -654,7 +716,7 @@ const EditorComponent: React.FC<Omit<MarkdownEditorProps, 'onChange'> & {
                         <button
                             className="toolbar-button"
                             onClick={toggleStrikethrough}
-                            title="Strikethrough (Ctrl+Shift+S)"
+                            title="Strikethrough"
                             aria-label="Toggle Strikethrough"
                         >
                             <span className="toolbar-button-icon"><Strikethrough size={20} /></span>
@@ -665,22 +727,84 @@ const EditorComponent: React.FC<Omit<MarkdownEditorProps, 'onChange'> & {
 
                     {/* Insert Group */}
                     <div className="toolbar-group" aria-label="Insert">
-                        <button
-                            className="toolbar-button"
-                            onClick={insertLink}
-                            title="Insert Link (Ctrl+K)"
-                            aria-label="Insert Link"
-                        >
-                            <span className="toolbar-button-icon"><Link size={20} /></span>
-                        </button>
-                        <button
-                            className="toolbar-button"
-                            onClick={insertImage}
-                            title="Insert Image"
-                            aria-label="Insert Image"
-                        >
-                            <span className="toolbar-button-icon"><Image size={20} /></span>
-                        </button>
+                        <div className="toolbar-dropdown-container">
+                            <button
+                                className={`toolbar-button ${activePopover === 'link' ? 'active' : ''}`}
+                                onClick={openLinkPopover}
+                                title="Insert Link"
+                                aria-label="Insert Link"
+                                aria-expanded={activePopover === 'link'}
+                            >
+                                <span className="toolbar-button-icon"><Link size={20} /></span>
+                            </button>
+                            {activePopover === 'link' && (
+                                <div className="toolbar-dropdown popover" role="dialog" aria-label="Insert Link">
+                                    <div className="dropdown-section-header">Insert Link</div>
+                                    <input
+                                        className="popover-input"
+                                        type="text"
+                                        value={linkUrl}
+                                        onChange={(e) => { setLinkUrl(e.target.value); setLinkError(null); }}
+                                        onKeyDown={(e) => { if (e.key === 'Enter') handleInsertLink(); }}
+                                        placeholder="https://example.com"
+                                        aria-label="Link URL"
+                                        autoFocus
+                                    />
+                                    <input
+                                        className="popover-input"
+                                        type="text"
+                                        value={linkText}
+                                        onChange={(e) => setLinkText(e.target.value)}
+                                        onKeyDown={(e) => { if (e.key === 'Enter') handleInsertLink(); }}
+                                        placeholder="Link text (optional)"
+                                        aria-label="Link display text"
+                                    />
+                                    {linkError && <div className="popover-error">{linkError}</div>}
+                                    <div className="popover-actions">
+                                        <button className="popover-submit" onClick={handleInsertLink}>Insert</button>
+                                    </div>
+                                </div>
+                            )}
+                        </div>
+                        <div className="toolbar-dropdown-container">
+                            <button
+                                className={`toolbar-button ${activePopover === 'image' ? 'active' : ''}`}
+                                onClick={openImagePopover}
+                                title="Insert Image"
+                                aria-label="Insert Image"
+                                aria-expanded={activePopover === 'image'}
+                            >
+                                <span className="toolbar-button-icon"><Image size={20} /></span>
+                            </button>
+                            {activePopover === 'image' && (
+                                <div className="toolbar-dropdown popover" role="dialog" aria-label="Insert Image">
+                                    <div className="dropdown-section-header">Insert Image</div>
+                                    <input
+                                        className="popover-input"
+                                        type="text"
+                                        value={imageUrl}
+                                        onChange={(e) => { setImageUrl(e.target.value); setImageError(null); }}
+                                        onKeyDown={(e) => { if (e.key === 'Enter') handleInsertImage(); }}
+                                        placeholder="https://example.com/image.png"
+                                        aria-label="Image URL"
+                                        autoFocus
+                                    />
+                                    <input
+                                        className="popover-input"
+                                        type="text"
+                                        value={imageAlt}
+                                        onChange={(e) => setImageAlt(e.target.value)}
+                                        onKeyDown={(e) => { if (e.key === 'Enter') handleInsertImage(); }}
+                                        placeholder="Alt text (optional)"
+                                        aria-label="Image alt text"
+                                    />
+                                    {imageError && <div className="popover-error">{imageError}</div>}
+                                    <div className="popover-actions">
+                                        <button className="popover-submit" onClick={handleInsertImage}>Insert</button>
+                                    </div>
+                                </div>
+                            )}
+                        </div>
                     </div>
 
                     <div className="toolbar-divider" />
