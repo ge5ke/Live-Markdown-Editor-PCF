@@ -123,8 +123,15 @@ const EditorComponent: React.FC<Omit<MarkdownEditorProps, 'onChange'> & {
     const [imageError, setImageError] = useState<string | null>(null);
     const editorRef = useRef<Editor | null>(null);
     const currentMarkdownRef = useRef<string>(value);
-    // True whenever the doc has unflushed edits (set synchronously on every ProseMirror update,
-    // cleared only once flush() has delivered the change via onUpdate).
+    // The last markdown actually DELIVERED to the host via onUpdate - distinct from
+    // currentMarkdownRef, which the debounced serialize (and flush) update without necessarily
+    // notifying. flush() compares its freshly-serialized output against this ref to decide
+    // whether onUpdate is actually needed.
+    const lastNotifiedRef = useRef<string>(value);
+    // Bookkeeping only now (see flush()'s comment) - true whenever the doc has unflushed edits,
+    // set synchronously on every ProseMirror update, cleared once flush() has run. flush() must
+    // NOT gate on this: @milkdown/plugin-listener internally debounces the `updated` callback by
+    // ~200ms, so this flag can still read false immediately after a keystroke.
     const isDirtyRef = useRef(false);
     const serializeTimeoutRef = useRef<ReturnType<typeof setTimeout> | null>(null);
     const containerRef = useRef<HTMLDivElement>(null);
@@ -259,36 +266,57 @@ const EditorComponent: React.FC<Omit<MarkdownEditorProps, 'onChange'> & {
     // on onUpdate (updateStats' identity is stable, deps []), so it does not churn across
     // unrelated re-renders.
     const flush = useCallback(() => {
-        if (serializeTimeoutRef.current) {
-            clearTimeout(serializeTimeoutRef.current);
-            serializeTimeoutRef.current = null;
-        }
-
-        if (!isDirtyRef.current) return;
-
-        // Always re-serialize AND recompute stats from the current doc at flush time, rather than
-        // trusting whatever the last debounced update left behind - the notify below must carry
-        // the truly latest content and the SAME word/char numbers index.ts stores as outputs.
-        // Failure here must NOT prevent the onUpdate below - losing the notify would lose the edit.
-        try {
-            const editor = getEditorRef.current?.();
-            if (editor) {
+        // Serializes UNCONDITIONALLY - deliberately does not gate on isDirtyRef.
+        // @milkdown/plugin-listener v7.20 internally debounces its `updated` callback by ~200ms
+        // (see node_modules/@milkdown/plugin-listener/lib/index.js), which is where isDirtyRef
+        // gets set. If focus leaves the container within that window (e.g. typing then
+        // immediately clicking a Save button), isDirtyRef can still read false even though the
+        // doc has just-typed, un-notified content - so isDirtyRef's timing cannot be trusted to
+        // decide whether a flush is needed. Instead, flush always re-serializes the live doc and
+        // compares the result against lastNotifiedRef (what the host actually has); onUpdate only
+        // fires when that comparison shows a real difference, so a flush with nothing new to
+        // report costs one serialize but never produces a spurious notify.
+        const editor = getEditorRef.current?.();
+        if (editor) {
+            try {
                 const view = editor.ctx.get(editorViewCtx);
                 const serializer = editor.ctx.get(serializerCtx);
                 if (view && serializer) {
+                    // The pending debounced serialize's work is now done synchronously below, so
+                    // cancel it - letting it fire later would just redundantly reserialize the
+                    // same (or since-superseded) doc state without notifying anyone.
+                    if (serializeTimeoutRef.current) {
+                        clearTimeout(serializeTimeoutRef.current);
+                        serializeTimeoutRef.current = null;
+                    }
+
                     let markdown = serializer(view.state.doc);
                     if (/^\s*$/.test(markdown)) {
                         markdown = '';
                     }
                     currentMarkdownRef.current = markdown;
                     updateStats(view.state.doc.textContent);
+
+                    if (markdown !== lastNotifiedRef.current) {
+                        onUpdate(markdown, { words: wordCountRef.current, chars: charCountRef.current });
+                        lastNotifiedRef.current = markdown;
+                    }
+                    isDirtyRef.current = false;
+                    return;
                 }
+            } catch (error) {
+                handleError(error, { component: 'MarkdownEditor', action: 'flush' });
             }
-        } catch (error) {
-            handleError(error, { component: 'MarkdownEditor', action: 'flush' });
         }
 
-        onUpdate(currentMarkdownRef.current, { words: wordCountRef.current, chars: charCountRef.current });
+        // Fallback - no editor/view/serializer available (e.g. mid-teardown), or serialization
+        // threw above: deliver whatever currentMarkdownRef last held (e.g. from the debounced
+        // serialize) rather than silently dropping a pending edit, still gated on lastNotifiedRef
+        // so an unchanged value never produces a spurious notify.
+        if (currentMarkdownRef.current !== lastNotifiedRef.current) {
+            onUpdate(currentMarkdownRef.current, { words: wordCountRef.current, chars: charCountRef.current });
+            lastNotifiedRef.current = currentMarkdownRef.current;
+        }
         isDirtyRef.current = false;
     }, [onUpdate, updateStats]);
 
@@ -419,6 +447,13 @@ const EditorComponent: React.FC<Omit<MarkdownEditorProps, 'onChange'> & {
             dispatch(tr);
 
             currentMarkdownRef.current = value;
+            // The host already owns this value (it is the very value we just applied), so it is
+            // also, by definition, the last value the host was notified of - record it here too.
+            // This makes the listener's late debounced callback (see comment below) fully
+            // harmless: a later flush() re-serializes identical content, compares equal against
+            // lastNotifiedRef, and correctly skips onUpdate instead of bouncing the host's own
+            // value back to it.
+            lastNotifiedRef.current = value;
             // tr.doc reflects the doc after the replaceWith step above - use its rendered text,
             // not the raw external markdown string, to keep chars/words on the same metric as
             // every other call site (markdown syntax length != rendered text length).
@@ -433,7 +468,9 @@ const EditorComponent: React.FC<Omit<MarkdownEditorProps, 'onChange'> & {
             // currentMarkdownRef was just set to `value` above, meaning the editor now exactly
             // mirrors the host value with nothing pending - reset isDirtyRef here so a later
             // readOnly-toggle flush or unmount-flush does not deliver this host-originated
-            // content back to the host as if it were a user edit.
+            // content back to the host as if it were a user edit. Even if isDirtyRef does get
+            // re-marked true by that late callback, flush() no longer trusts it either way (see
+            // flush()'s own comment) - it will just re-serialize and find nothing changed.
             isDirtyRef.current = false;
         } catch (error) {
             handleError(error, { component: 'MarkdownEditor', action: 'applyExternalValue' });
