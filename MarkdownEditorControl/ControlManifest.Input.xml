@@ -1,6 +1,6 @@
 <?xml version="1.0" encoding="utf-8" ?>
 <manifest>
-  <control namespace="LMD" constructor="MarkdownEditorControl" version="2.0.0" display-name-key="LMD - Lightweight Markdown Editor" description-key="Lightweight WYSIWYG Markdown editor with GFM support, Lucide icons, configurable toolbar sizing, and Dataverse integration" control-type="standard" >
+  <control namespace="LMD" constructor="MarkdownEditorControl" version="3.0.0" display-name-key="LMD - Lightweight Markdown Editor" description-key="Lightweight WYSIWYG Markdown editor with GFM support, Lucide icons, configurable toolbar sizing, and Dataverse integration" control-type="standard" >
     <external-service-usage enabled="false">
     </external-service-usage>
 

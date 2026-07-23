@@ -5,6 +5,63 @@ All notable changes to the Markdown Editor PCF Control will be documented in thi
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [3.0.0] - 2026-07-22
+
+**Breaking release.** This is a v3 overhaul focused on correctness, honesty, and weight —
+several features and one manifest property were removed rather than fixed in place.
+
+### Breaking
+
+- **`theme` property removed from the manifest.** The control is light-only now; makers who
+  had `theme` set to `dark`, `auto`, or `high-contrast` will see that configuration dropped
+  on upgrade. There is no runtime theme switching or OS dark-mode following anymore.
+- **Find & Replace removed** (panel UI, `useFindReplace` hook, global Ctrl+F capture).
+- **Save-status indicator removed** (the "Saved/Saving/Unsaved" badge never reflected the
+  actual record save and was misleading).
+
+### Changed
+
+- **Notify-on-blur value flow.** The bound `value` output now updates when focus leaves the
+  control (or on teardown), not continuously per keystroke. Typing no longer dirties the
+  host form mid-edit; a synchronous flush on blur/destroy guarantees the latest content is
+  handed to the platform before a Save-button click can read it. Ctrl+S while focus remains
+  inside the editor does not itself trigger a flush (it still blurs the field elsewhere in
+  the platform's own save flow).
+- **Read-only mode is now a true non-editable renderer.** `readOnly = true` configures the
+  underlying ProseMirror view as genuinely non-editable (not just visually disabled), hides
+  all toolbar/status chrome, and renders only the formatted markdown.
+- **`maxLength` is now hard-enforced**, not advisory: input beyond the limit is blocked at
+  the editor level rather than merely flagged after the fact. The metric is text length
+  (`doc.textContent`), which can diverge from the serialized markdown byte count for content
+  with heavy syntax (tables, links, code fences). Makers should set `maxLength` with some
+  headroom below the bound Dataverse column's configured max length, not exactly at it.
+- **Scroll behavior: click-to-interact.** The editor no longer captures page scroll on
+  hover; the inner pane only scrolls once it has focus, so mouse-wheel scrolling over the
+  control while the page scrolls past it now behaves like a normal form field.
+- **Corner rendering fixed** so all four corners round correctly regardless of which
+  chrome (toolbar/status bar) is present — previously read-only mode (and any config with
+  `showToolbar = false`) squared off the top corners in model-driven forms.
+- **URL validation hardened** for link and image insertion: URLs are now parsed with the
+  real WHATWG `URL` parser (after stripping control/whitespace characters) instead of naive
+  substring/prefix checks, closing bypasses like embedded tabs inside a `javascript:` scheme.
+
+### Removed
+
+- `@milkdown/theme-nord` and its bundled Tailwind-based global CSS reset, which was leaking
+  unscoped rules (e.g. `h1..h6`, `a`, `ul/ol` resets) into the host model-driven form page
+  outside the control's own boundary.
+- Theme machinery throughout: manifest property, `index.ts` validation, prop threading,
+  `matchMedia`/`auto` logic, dark CSS variable block, and theme toggle UI.
+
+### Performance
+
+- Bundle size reduced via the theme-nord removal, feature deletions, and dependency
+  cleanup, on top of switching to a genuine production build (minified, production React,
+  no dev eval wrappers). See `docs/INVESTIGATION.md` ("Lightness plan") for measured
+  before/after bundle sizes.
+
+---
+
 ## [1.6.0] - 2025-12-30
 
 ### Changed

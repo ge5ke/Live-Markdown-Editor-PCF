@@ -1,6 +1,6 @@
 {
   "name": "lmd-pcf",
-  "version": "2.0.0",
+  "version": "3.0.0",
   "description": "Lightweight Markdown editor PCF control with GFM support, Lucide icons, and configurable toolbar sizing for Power Apps.",
   "keywords": [
     "powerapps",
@@ -9,21 +9,12 @@
     "markdown",
     "markdown-editor",
     "react",
-    "milkdown",
     "gfm",
     "github-flavored-markdown",
     "dataverse"
   ],
   "author": "HAP",
   "license": "MIT",
-  "repository": {
-    "type": "git",
-    "url": "git+https://github.com/Sahib-Sawhney-WH/Live-Markdown-Editor-PCF.git"
-  },
-  "bugs": {
-    "url": "https://github.com/Sahib-Sawhney-WH/Live-Markdown-Editor-PCF/issues"
-  },
-  "homepage": "https://github.com/Sahib-Sawhney-WH/Live-Markdown-Editor-PCF#readme",
   "sideEffects": [
     "*.css"
   ],

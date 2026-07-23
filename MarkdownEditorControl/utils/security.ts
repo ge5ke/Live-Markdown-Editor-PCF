@@ -109,6 +109,9 @@ export function validateLinkUrl(url: string): ValidationResult {
  * Validates a URL for use in images.
  * Allows http, https, relative URLs, and data: URLs ONLY when the full (stripped) href starts
  * with "data:image/" - e.g. data:text/html is rejected even though its protocol is "data:".
+ * Note: data:image/svg+xml URLs can embed <script>, but that is deliberately accepted here -
+ * the value only ever lands in an <img> src context, where browsers do not execute scripts
+ * inside SVG image documents.
  */
 export function validateImageUrl(url: string): ValidationResult {
     if (!url || typeof url !== 'string') {

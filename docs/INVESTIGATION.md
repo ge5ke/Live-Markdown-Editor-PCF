@@ -358,7 +358,16 @@ Floor: the Milkdown + ProseMirror editor engine itself stays and is the irreduci
 of the bundle; the target is everything *around* it.
 
 **Baseline (prod build, pre-changes):** 740,122 bytes minified (216,609 bytes gzip) — measured 2026-07-22, webpack production mode. (The oft-cited 2.8 MB was the dev build.)
-**Result (prod build, post-changes):** _to be measured_
+**Result (prod build, post-changes):** 735,667 bytes minified (215,540 bytes gzip) —
+measured 2026-07-22, webpack production mode, after `npm ci` for a clean reproducible
+install. Delta vs baseline: **-4,455 bytes minified (-0.60%)**, **-1,069 bytes gzip
+(-0.49%)**. Smaller than the removed-feature surface (Find & Replace, save-status,
+theme machinery, theme-nord) would suggest on its own — the Milkdown/ProseMirror engine
+itself dominates the bundle and is unaffected, and this pass also added code (WHATWG-based
+URL validation, popovers replacing prompts, `@milkdown/plugin-clipboard` paste handling)
+that partially offsets the removals. The win is real but modest in raw bytes; the larger
+value of this pass was correctness (notify-on-blur, true read-only, hardened validation)
+and removing the theme-nord global CSS leak into the host form, not bundle size alone.
 
 ## Cross-reference to the full code review
 

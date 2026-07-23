@@ -39,7 +39,6 @@ A feature-rich Markdown editor built as a Power Apps Component Framework (PCF) c
 - **Keyboard Shortcuts**: Tooltips showing shortcuts (Ctrl+B, Ctrl+I, etc.)
 
 ### Advanced Features
-- **Find and Replace (Ctrl+F)**: Search with match count, navigate between matches, replace single or all occurrences
 - **Export to HTML**: Download formatted HTML document with custom filename
 - **Export to PDF**: Choose between text-based (searchable) or image-based PDF export
 - **Image Paste**: Paste images directly from clipboard (Ctrl+V), automatically converts to embedded base64
@@ -52,18 +51,25 @@ A feature-rich Markdown editor built as a Power Apps Component Framework (PCF) c
   - Quick: Simple Note, Checklist, Comparison Table
 - **Table Editing**: Visual grid picker for insertion, add/delete rows and columns, delete entire table
 - **Copy to Clipboard**: One-click markdown copy with visual feedback
-- **Auto-save Indicator**: Shows Saved/Saving/Unsaved status in real-time
 
 ### Editor Features
-- **Two-way Data Binding**: Full integration with Power Apps and Dataverse
+- **Two-way Data Binding**: Full integration with Power Apps and Dataverse. The bound
+  `value` output updates on **blur** (focus leaving the control) or on teardown, not on
+  every keystroke — the host form no longer goes dirty mid-typing, and a synchronous flush
+  guarantees the latest content is delivered before a Save click can read it.
 - **Dynamic Sizing**: Automatically adjusts to container height and width
 - **Responsive Design**: Adapts toolbar and layout for narrow widths
-- **Theme Support**: Light, Dark, Auto (system preference), and High Contrast modes
-- **Theme Toggle**: Click sun/moon icon to switch between light and dark mode
+- **Click-to-interact Scrolling**: The editor's inner content only captures the mouse wheel
+  once it has focus, so scrolling the host page past the control behaves normally.
 - **Spell Check**: Configurable spell checking
-- **Read-only Mode**: Display markdown without editing capability
+- **Read-only Mode**: A true non-editable renderer — no toolbar, no status bar, just the
+  formatted markdown (`readOnly = true`).
 - **Character/Word Count**: Live statistics in status bar
-- **Max Length Validation**: Configurable character limit with validation feedback
+- **Max Length Validation**: Character input is hard-blocked once the limit is reached. The
+  limit is measured against visible text length, which can be lower than the serialized
+  markdown's byte count for syntax-heavy content (tables, links, code fences) — set
+  `maxLength` with some headroom below the bound Dataverse column's configured max length,
+  not exactly at it.
 - **Zero-lag Typing**: All processing deferred until typing stops - buttery smooth at any speed
 - **Scrollable Tables**: Wide tables scroll horizontally instead of being cut off
 
@@ -130,7 +136,6 @@ markdown_editor/
 **MarkdownEditor.tsx** - React component with:
 - Milkdown editor integration with GFM support
 - Complete toolbar implementation
-- Find and Replace functionality
 - Export to HTML and PDF
 - Template insertion
 - Debounced updates for performance
@@ -165,8 +170,7 @@ The control accepts the following input parameters (defined in `ControlManifest.
 |-----------|------|---------|-------------|
 | `value` | Multiple Lines of Text | "" | The markdown content (bound property) |
 | `rows` | Whole.None | 10 | Number of rows (controls height: rows × 28px + 80px) |
-| `readOnly` | Two Options | false | Whether the editor is read-only |
-| `theme` | SingleLine.Text | "light" | Theme: light, dark, auto, high-contrast |
+| `readOnly` | Two Options | false | Whether the editor is a read-only renderer (no toolbar/status bar) |
 | `showToolbar` | Two Options | true | Show/hide the formatting toolbar |
 | `enableSpellCheck` | Two Options | true | Enable spell checking |
 | `maxLength` | Whole.None | 100000 | Maximum character length |
@@ -244,7 +248,6 @@ For detailed Dataverse setup instructions, see [DATAVERSE_INTEGRATION.md](DATAVE
 - **@fluentui/react-icons 2.0.315**: Microsoft Fluent UI icon library
 - **@milkdown/preset-commonmark**: CommonMark markdown support
 - **@milkdown/preset-gfm**: GitHub Flavored Markdown support
-- **@milkdown/theme-nord**: Nord theme for editor styling
 - **@milkdown/plugin-history**: Undo/redo functionality
 - **jsPDF 3.0.4**: PDF generation for text-based export
 - **html2canvas 1.4.1**: Screenshot capture for image-based PDF export
@@ -331,8 +334,7 @@ Before submitting changes:
 - [ ] All toolbar buttons work correctly
 - [ ] Height/width sliders work in test harness
 - [ ] Markdown renders correctly
-- [ ] Two-way binding works with Dataverse
-- [ ] Find and Replace works
+- [ ] Two-way binding works with Dataverse (value updates on blur, not per keystroke)
 - [ ] Export to HTML works
 - [ ] Export to PDF works (both text and image modes)
 - [ ] No console errors
